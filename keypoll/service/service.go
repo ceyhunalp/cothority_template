@@ -1,8 +1,6 @@
 package service
 
 import (
-	//kp "github.com/dedis/cothority_template/keypoll/protocol"
-	//"github.com/dedis/cothority_template/protocol"
 	"github.com/dedis/cothority_template/keypoll/protocol"
 	"gopkg.in/dedis/crypto.v0/abstract"
 	"gopkg.in/dedis/onet.v1"
