@@ -1,8 +1,8 @@
 package protocol
 
 import (
-	"gopkg.in/dedis/onet.v1"
 	"gopkg.in/dedis/crypto.v0/abstract"
+	"gopkg.in/dedis/onet.v1"
 )
 
 type Announce struct {
@@ -15,6 +15,7 @@ type StructAnnounce struct {
 }
 
 type Reply struct {
+	// PrivateKey []abstract.Scalar
 	PublicKey []abstract.Point
 }
 

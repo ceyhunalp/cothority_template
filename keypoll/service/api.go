@@ -15,6 +15,7 @@ func NewClient() *Client {
 }
 
 func (c *Client) Keypoll(r *onet.Roster) ([]abstract.Point, onet.ClientError) {
+	// func (c *Client) Keypoll(r *onet.Roster) ([]abstract.Scalar, onet.ClientError) {
 	keypollReq := &KeypollRequest{
 		Roster: r,
 	}
@@ -24,7 +25,6 @@ func (c *Client) Keypoll(r *onet.Roster) ([]abstract.Point, onet.ClientError) {
 
 	log.Lvl3("Roster length is", len(r.List))
 
-	//List[0] --> tcp://127.0.0.1:7002
 	dst := r.List[0]
 	log.Lvl3("Sending message to", dst)
 	reply := &KeypollResponse{}
@@ -33,5 +33,6 @@ func (c *Client) Keypoll(r *onet.Roster) ([]abstract.Point, onet.ClientError) {
 		return nil, err
 	}
 	log.Lvl3("Returning from Keypoll")
+	// return reply.PrivateKeys, nil
 	return reply.PublicKeys, nil
 }

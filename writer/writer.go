@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 
 	"github.com/dedis/cothority/skipchain"
+	ds "github.com/dedis/cothority_template/decshare/service"
 	keypoll "github.com/dedis/cothority_template/keypoll/service"
 	"github.com/dedis/cothority_template/writer/util"
 	ocs "github.com/dedis/onchain-secrets"
@@ -12,8 +14,16 @@ import (
 	"gopkg.in/dedis/crypto.v0/ed25519"
 	"gopkg.in/dedis/crypto.v0/random"
 	"gopkg.in/dedis/crypto.v0/share/pvss"
+	"gopkg.in/dedis/onet.v1"
 	"gopkg.in/dedis/onet.v1/log"
 )
+
+type WriteTransactionData struct {
+	EncShares []pvss.PubVerShare
+	PubKeys   []abstract.Point
+	G         abstract.Point
+	H         abstract.Point
+}
 
 func main() {
 
@@ -25,7 +35,15 @@ func main() {
 
 	log.SetDebugVisible(*dbgPtr)
 
-	pubKeys := getPubKeys(filePtr)
+	el, err := util.ReadRoster(*filePtr)
+	log.ErrFatal(err, "Couldn't Read File")
+	log.Lvl3(el)
+
+	for i := 0; i < len(el.List); i++ {
+		fmt.Println(el.List[i])
+	}
+
+	pubKeys := getPubKeys(el)
 
 	for i := 0; i < len(pubKeys); i++ {
 		fmt.Println(pubKeys[i])
@@ -46,7 +64,7 @@ func main() {
 	s := suite.Scalar().Pick(random.Stream)
 	n := 7
 	t := 2*n/3 + 1
-	tmpEncShares, _, _ := pvss.EncShares(suite, H, pubKeys, s, t)
+	tmpEncShares, pubPoly, _ := pvss.EncShares(suite, H, pubKeys, s, t)
 	sz := len(tmpEncShares)
 	encShares := make([]pvss.PubVerShare, sz)
 
@@ -54,26 +72,121 @@ func main() {
 		encShares[i] = *tmpEncShares[i]
 	}
 
+	polyCommits := make([]abstract.Point, n)
+
+	for i := 0; i < n; i++ {
+		polyCommits[i] = pubPoly.Eval(tmpEncShares[i].S.I).V
+	}
+
+	// Creating write transaction
 	sbWrite := createWriteTransaction(scurl, encShares, pubKeys, G, H, pubKey)
 	fmt.Println("sbWrite hash is", sbWrite.Hash)
 
+	// diffSk := suite.Scalar().Pick(random.Stream)
+	// diffPk := suite.Point().Mul(nil, diffSk)
+	// sbWriteDiff := createWriteTransaction(scurl, encShares, pubKeys, G, H, diffPk)
+	// fmt.Println("sbWriteDiff hash is", sbWriteDiff.Hash)
+
+	// Creating read transaction
 	dataID := sbWrite.Hash
 	sbRead := createReadTransaction(scurl, dataID, privKey)
 	fmt.Println("sbRead hash is", sbRead.Hash)
+	fmt.Println("sbRead skipchain id is", sbRead.SkipChainID())
 
-	getWriteTransaction(scurl, sbWrite.Hash)
+	// Get write transaction from skipchain
+	writeTxnData := getWriteTransaction(scurl, sbWrite.Hash)
+	sz = len(writeTxnData.PubKeys)
+	for i := 0; i < sz; i++ {
+		fmt.Println(writeTxnData.PubKeys[i])
+	}
+	fmt.Println("******************************************************")
 
+	// Get read requests
+	// If getReadRequest returns True -- read transaction valid / logged in the skipchain
+	readID := sbRead.Hash
+	hc := getReadRequest(scurl, dataID, readID)
+	fmt.Println("hash check:", hc)
+
+	decShares := getDecryptShares(el, H, tmpEncShares, polyCommits)
+
+	fmt.Println(len(decShares))
+	for i := 0; i < len(decShares); i++ {
+		fmt.Println(decShares[i].S.V)
+	}
+
+	recSecret, err := pvss.RecoverSecret(suite, G, pubKeys, tmpEncShares, decShares, t, n)
+
+	log.ErrFatal(err)
+
+	G_s := suite.Point().Mul(nil, s)
+	fmt.Println("G_s is:\n", G_s)
+	fmt.Println("==================")
+	fmt.Println("Recovered secret is:\n", recSecret)
 }
 
-func getWriteTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) {
+// func getDecryptShares(el *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) []abstract.Point {
+func getDecryptShares(el *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) []*pvss.PubVerShare {
+
+	cl := ds.NewClient()
+	decShares, err := cl.Decshare(el, h, encShares, polyCommits)
+	log.ErrFatal(err)
+
+	size := len(decShares)
+	for i := 0; i < size/2; i++ {
+		tmp := decShares[size-i-1]
+		decShares[size-i-1] = decShares[i]
+		decShares[i] = tmp
+	}
+
+	return decShares
+}
+
+func getReadRequest(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, readID skipchain.SkipBlockID) (hc int) {
+
+	cl := ocs.NewClient()
+	rd, err := cl.GetReadRequests(scurl, dataID, 0)
+	log.ErrFatal(err)
+
+	//TODO: What if returns multiple ReadDoc
+	sz := len(rd)
+	/*
+		for i := 0; i < sz; i++ {
+			fmt.Println("============ Printing ReadDoc", i, "===============")
+			fmt.Println("getReadRequest: ReadDoc.Reader -->", rd[i].Reader)
+			// ReadID == Hash of the read block
+			fmt.Println("getReadRequest: ReadDoc.ReadID -->", rd[i].ReadID)
+			fmt.Println("getReadRequest: ReadDoc.DataID -->", rd[i].DataID)
+		}
+	*/
+	if sz > 0 {
+		readDoc := rd[0]
+		fmt.Println("ReadDoc hash is", readDoc.ReadID)
+		hashCheck := bytes.Compare(readID, readDoc.ReadID)
+		if hashCheck == 0 {
+			log.Lvl3("Matching hash values")
+			return 1
+		} else {
+			log.Lvl3("Different hash values")
+			return 0
+		}
+	} else {
+		log.Lvl3("No read transaction found for the given write transaction")
+		return 0
+	}
+}
+
+func getWriteTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) (wtd *WriteTransactionData) {
 
 	cl := ocs.NewClient()
 	writeTxn, err := cl.GetWriteTxnData(scurl, dataID)
-	log.ErrFatal(err)
-	sz := len(writeTxn.PubKeys)
-	for i := 0; i < sz; i++ {
-		fmt.Println(writeTxn.PubKeys[i])
+	txnData := &WriteTransactionData{
+		EncShares: writeTxn.EncShares,
+		G:         writeTxn.G,
+		H:         writeTxn.H,
+		PubKeys:   writeTxn.PubKeys,
 	}
+	log.ErrFatal(err)
+	return txnData
 }
 
 func createReadTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, privKey abstract.Scalar) (sb *skipchain.SkipBlock) {
@@ -107,19 +220,11 @@ func createSkipchain(groupToml *string) *ocs.SkipChainURL {
 	return scurl
 }
 
-func getPubKeys(groupToml *string) []abstract.Point {
-
-	fmt.Println(groupToml)
-	el, err := util.ReadRoster(*groupToml)
-	log.ErrFatal(err, "Couldn't Read File")
-	log.Lvl3(el)
-
-	for i := 0; i < len(el.List); i++ {
-		fmt.Println(el.List[i])
-	}
+func getPubKeys(el *onet.Roster) []abstract.Point {
 
 	cl := keypoll.NewClient()
 	keys, err := cl.Keypoll(el)
+	log.ErrFatal(err)
 
 	size := len(keys)
 	for i := 0; i < size/2; i++ {

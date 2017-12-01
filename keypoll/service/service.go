@@ -19,6 +19,7 @@ type KeypollRequest struct {
 }
 
 type KeypollResponse struct {
+	// PrivateKeys []abstract.Scalar
 	PublicKeys []abstract.Point
 }
 
@@ -35,9 +36,8 @@ func init() {
 }
 
 func (s *KeypollService) KeypollRequest(req *KeypollRequest) (*KeypollResponse, onet.ClientError) {
-	log.Lvl5("KeypollRequest received in service")
+	log.Lvl3("KeypollRequest received in service")
 	tree := req.Roster.GenerateNaryTreeWithRoot(1, s.ServerIdentity())
-	log.Lvl5("========= Tree generated =========")
 	if tree == nil {
 		return nil, onet.NewClientErrorCode(ErrorParse, "couldn't create tree")
 	}
@@ -46,11 +46,11 @@ func (s *KeypollService) KeypollRequest(req *KeypollRequest) (*KeypollResponse, 
 		return nil, onet.NewClientError(err)
 	}
 	err = pi.Start()
-	log.Lvl5("==================== Protocol started =====================")
 	if err != nil {
 		return nil, onet.NewClientError(err)
 	}
 	resp := &KeypollResponse{
+		// PrivateKeys: <-pi.(*protocol.KeypollChannelStruct).PrivateKeys,
 		PublicKeys: <-pi.(*protocol.KeypollChannelStruct).PublicKeys,
 	}
 	return resp, nil

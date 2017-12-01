@@ -20,7 +20,7 @@ func init() {
 type KeypollChannelStruct struct {
 	*onet.TreeNodeInstance
 	Message string
-	//PublicKey chan abstract.Point
+	// PrivateKeys chan []abstract.Scalar
 	PublicKeys      chan []abstract.Point
 	ChannelAnnounce chan StructAnnounce
 	ChannelReply    chan []StructReply
@@ -31,6 +31,7 @@ func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
 	KeypollChannels := &KeypollChannelStruct{
 		TreeNodeInstance: n,
 		PublicKeys:       make(chan []abstract.Point),
+		// PrivateKeys: make(chan []abstract.Scalar),
 	}
 	err := KeypollChannels.RegisterChannel(&KeypollChannels.ChannelAnnounce)
 	if err != nil {
@@ -50,9 +51,11 @@ func (p *KeypollChannelStruct) Start() error {
 }
 
 func (p *KeypollChannelStruct) Dispatch() error {
+	// var keys []abstract.Scalar
 	var keys []abstract.Point
 	announcement := <-p.ChannelAnnounce
 	if p.IsLeaf() {
+		// keys = append(keys, p.Private())
 		keys = append(keys, p.Public())
 		err := p.SendTo(p.Parent(), &Reply{keys})
 		if err != nil {
@@ -72,6 +75,7 @@ func (p *KeypollChannelStruct) Dispatch() error {
 
 	for _, c := range reply {
 		for _, key := range c.PublicKey {
+			// for _, key := range c.PrivateKey {
 			keys = append(keys, key)
 		}
 	}
@@ -81,13 +85,16 @@ func (p *KeypollChannelStruct) Dispatch() error {
 	if !p.IsRoot() {
 		log.Lvl3("Sending to parent")
 		keys = append(keys, p.Public())
+		// keys = append(keys, p.Private())
 		err := p.SendTo(p.Parent(), &Reply{keys})
 		if err != nil {
 			log.Error(p.Info(), "failed to reply to", p.Parent().Name(), err)
 		}
 	} else {
 		keys = append(keys, p.Public())
+		// keys = append(keys, p.Private())
 		log.Lvl3("Root-node is done - nbr of keys:", len(keys))
+		// p.PrivateKeys <- keys
 		p.PublicKeys <- keys
 	}
 	return nil
