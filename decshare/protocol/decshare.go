@@ -13,21 +13,20 @@ import (
 var Name = "Decshare"
 
 func init() {
-	network.RegisterMessage(Prep{})
-	network.RegisterMessage(Resp{})
+	network.RegisterMessage(AnnounceDecrypt{})
+	network.RegisterMessage(DecryptReply{})
 	onet.GlobalProtocolRegister(Name, NewProtocol)
 }
 
 type DecshareChannelStruct struct {
 	*onet.TreeNodeInstance
-	Message     string
-	DecShares   chan []*pvss.PubVerShare
-	ChannelPrep chan StructPrep
-	ChannelResp chan []StructResp
-	Kamil       int
-	H           abstract.Point
-	EncShares   []*pvss.PubVerShare
-	EncProofs   []abstract.Point
+	Message         string
+	DecShares       chan []*pvss.PubVerShare
+	ChannelAnnounce chan StructAnnounceDecrypt
+	ChannelReply    chan []StructDecryptReply
+	H               abstract.Point
+	EncShares       []*pvss.PubVerShare
+	EncProofs       []abstract.Point
 }
 
 func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
@@ -36,11 +35,11 @@ func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
 		TreeNodeInstance: n,
 		DecShares:        make(chan []*pvss.PubVerShare),
 	}
-	err := DecshareChannels.RegisterChannel(&DecshareChannels.ChannelPrep)
+	err := DecshareChannels.RegisterChannel(&DecshareChannels.ChannelAnnounce)
 	if err != nil {
 		return nil, errors.New("couldn't register announcement-channel: " + err.Error())
 	}
-	err = DecshareChannels.RegisterChannel(&DecshareChannels.ChannelResp)
+	err = DecshareChannels.RegisterChannel(&DecshareChannels.ChannelReply)
 	if err != nil {
 		return nil, errors.New("couldn't register reply-channel: " + err.Error())
 	}
@@ -49,8 +48,7 @@ func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
 
 func (p *DecshareChannelStruct) Start() error {
 	log.Lvl3("Starting DecshareChannels")
-	log.Info("in Start Kamil is", p.Kamil)
-	p.ChannelPrep <- StructPrep{nil, Prep{
+	p.ChannelAnnounce <- StructAnnounceDecrypt{nil, AnnounceDecrypt{
 		H:         p.H,
 		EncShares: p.EncShares,
 		EncProofs: p.EncProofs,
@@ -59,20 +57,21 @@ func (p *DecshareChannelStruct) Start() error {
 }
 
 func (p *DecshareChannelStruct) Dispatch() error {
-	prep := <-p.ChannelPrep
 	var decShares []*pvss.PubVerShare
 	var tmp *pvss.PubVerShare
 	var err error
+
 	idx := p.Index()
+	announcement := <-p.ChannelAnnounce
 
 	if p.IsLeaf() {
-		tmp, err = pvss.DecShare(network.Suite, prep.H, p.Public(), prep.EncProofs[idx], p.Private(), prep.EncShares[idx])
+		tmp, err = pvss.DecShare(network.Suite, announcement.H, p.Public(), announcement.EncProofs[idx], p.Private(), announcement.EncShares[idx])
 		log.Info("Error is", err)
 		if err != nil {
 			log.Error(p.Info(), "Failed to decrypt share", p.Parent().Name(), err)
 		}
 		decShares = append(decShares, tmp)
-		err := p.SendTo(p.Parent(), &Resp{decShares})
+		err = p.SendTo(p.Parent(), &DecryptReply{decShares})
 		if err != nil {
 			log.Error(p.Info(), "Failed to send reply to", p.Parent().Name(), err)
 		}
@@ -80,13 +79,13 @@ func (p *DecshareChannelStruct) Dispatch() error {
 	}
 
 	for _, c := range p.Children() {
-		err := p.SendTo(c, &prep.Prep)
+		err := p.SendTo(c, &announcement.AnnounceDecrypt)
 		if err != nil {
 			log.Error(p.Info(), "failed to send to", c.Name(), err)
 		}
 	}
 
-	reply := <-p.ChannelResp
+	reply := <-p.ChannelReply
 
 	for _, c := range reply {
 		for _, tmp := range c.DecShare {
@@ -96,7 +95,7 @@ func (p *DecshareChannelStruct) Dispatch() error {
 
 	log.Lvl3(p.ServerIdentity().Address, "is done with total of", len(decShares))
 
-	tmp, err = pvss.DecShare(network.Suite, prep.H, p.Public(), prep.EncProofs[idx], p.Private(), prep.EncShares[idx])
+	tmp, err = pvss.DecShare(network.Suite, announcement.H, p.Public(), announcement.EncProofs[idx], p.Private(), announcement.EncShares[idx])
 	log.Info("Error is", err)
 	if err != nil {
 		log.Error(p.Info(), "Failed to decrypt share", p.Parent().Name(), err)
@@ -105,7 +104,7 @@ func (p *DecshareChannelStruct) Dispatch() error {
 
 	if !p.IsRoot() {
 		log.Lvl3("Sending to parent")
-		err := p.SendTo(p.Parent(), &Resp{decShares})
+		err := p.SendTo(p.Parent(), &DecryptReply{decShares})
 		if err != nil {
 			log.Error(p.Info(), "failed to reply to", p.Parent().Name(), err)
 		}

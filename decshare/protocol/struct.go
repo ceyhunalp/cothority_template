@@ -6,22 +6,22 @@ import (
 	"gopkg.in/dedis/onet.v1"
 )
 
-type Prep struct {
+type AnnounceDecrypt struct {
 	H         abstract.Point
 	EncShares []*pvss.PubVerShare
 	EncProofs []abstract.Point
 }
 
-type StructPrep struct {
+type StructAnnounceDecrypt struct {
 	*onet.TreeNode
-	Prep
+	AnnounceDecrypt
 }
 
-type Resp struct {
+type DecryptReply struct {
 	DecShare []*pvss.PubVerShare
 }
 
-type StructResp struct {
+type StructDecryptReply struct {
 	*onet.TreeNode
-	Resp
+	DecryptReply
 }
