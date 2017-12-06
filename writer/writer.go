@@ -26,35 +26,53 @@ func main() {
 	filePtr := flag.String("g", "", "group.toml file for trustees")
 	pkFilePtr := flag.String("p", "", "pk.txt file")
 	dbgPtr := flag.Int("d", 0, "debug level")
-	//tFilePtr := flag.String("t", "", "group.toml file for trustees")
-	//cFilePtr := flag.String("c", "", "group.toml file for the cothority")
 	flag.Parse()
 
 	log.SetDebugVisible(*dbgPtr)
 
 	el, err := util.ReadRoster(*filePtr)
-	log.ErrFatal(err, "Couldn't Read File")
-	log.Lvl3(el)
 
-	for i := 0; i < len(el.List); i++ {
-		fmt.Println(el.List[i])
+	if err != nil {
+		log.Errorf("Couldn't read group.toml file: %v", err)
+		os.Exit(1)
 	}
 
-	pubKeys := getPubKeys(pkFilePtr)
+	// for i := 0; i < len(el.List); i++ {
+	// 	fmt.Println(el.List[i])
+	// }
 
+	pubKeys, err := getPubKeys(pkFilePtr)
+
+	if err != nil {
+		log.Errorf("Couldn't read pk file: %v", err)
+		os.Exit(1)
+	}
 	// pubKeys := getPubKeys(el)
 	// for i := 0; i < len(pubKeys); i++ {
 	// 	fmt.Println(pubKeys[i])
 	// }
 
-	dataPVSS, _ := setupPVSS(pubKeys)
+	dataPVSS, err := setupPVSS(pubKeys)
+
+	//TODO: Use symKey to encrypt data
+	// g_s, _ := dataPVSS.Suite.Point().Mul(nil, dataPVSS.Secret).MarshalBinary()
+	// symKey := sha256.Sum256(g_s)
+
+	if err != nil {
+		log.Errorf("Could not setup PVSS: %v", err)
+		os.Exit(1)
+	}
 
 	// Reader's pk/sk pair
 	privKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	pubKey := dataPVSS.Suite.Point().Mul(nil, privKey)
 
 	scurl, err := createSkipchain(filePtr)
-	fmt.Println(scurl.Genesis)
+	if err != nil {
+		log.Errorf("Could not create skipchain: %v", err)
+		os.Exit(1)
+	}
+	// fmt.Println(scurl.Genesis)
 
 	// tmpEncShares, pubPoly, _ := pvss.EncShares(suite, H, pubKeys, s, t)
 	// sz := len(tmpEncShares)
@@ -64,42 +82,71 @@ func main() {
 	// }
 
 	// Creating write transaction
-	sbWrite, _ := createWriteTransaction(scurl, dataPVSS, pubKey)
-	fmt.Println("sbWrite hash is", sbWrite.Hash)
-
-	// diffSk := suite.Scalar().Pick(random.Stream)
-	// diffPk := suite.Point().Mul(nil, diffSk)
-	// sbWriteDiff := createWriteTransaction(scurl, encShares, pubKeys, G, H, diffPk)
-	// fmt.Println("sbWriteDiff hash is", sbWriteDiff.Hash)
-
-	// Creating read transaction
-	dataID := sbWrite.Hash
-	sbRead, _ := createReadTransaction(scurl, dataID, privKey)
-	fmt.Println("sbRead hash is", sbRead.Hash)
-	fmt.Println("sbRead skipchain id is", sbRead.SkipChainID())
+	sbWrite, err := createWriteTransaction(scurl, dataPVSS, pubKey)
+	if err != nil {
+		log.Errorf("Could not create write transaction: %v", err)
+		os.Exit(1)
+	}
+	// fmt.Println("sbWrite hash is", sbWrite.Hash)
 
 	// Get write transaction from skipchain
 	writeTxnData, err := getWriteTransaction(scurl, sbWrite.Hash)
-	sz := len(writeTxnData.PubKeys)
-	for i := 0; i < sz; i++ {
-		fmt.Println(writeTxnData.PubKeys[i])
+	if err != nil {
+		log.Errorf("Could not retrieve write transaction: %v", err)
+		os.Exit(1)
 	}
-	fmt.Println("******************************************************")
 
-	// Get read requests
+	// diffSk := dataPVSS.Suite.Scalar().Pick(random.Stream)
+	// diffPk := dataPVSS.Suite.Point().Mul(nil, diffSk)
+	// sbWriteDiff, _ := createWriteTransaction(scurl, dataPVSS, diffPk)
+	// fmt.Println("sbWriteDiff hash is", sbWriteDiff.Hash)
+
+	// TODO: Reader first checks H'=H(c) ?= H_c in the write transaction
+	// Creating read transaction
+	writeID := sbWrite.Hash
+	sbRead, err := createReadTransaction(scurl, writeID, privKey)
+	// TESTING!
+	// sbRead, err := createReadTransaction(scurl, writeID, diffSk)
+	if err != nil {
+		log.Errorf("Could not create read transaction: %v", err)
+		os.Exit(1)
+	}
+	// fmt.Println("sbRead hash is", sbRead.Hash)
+	// fmt.Println("sbRead skipchain id is", sbRead.SkipChainID())
+
+	// sz := len(writeTxnData.PubKeys)
+	// for i := 0; i < sz; i++ {
+	// 	fmt.Println(writeTxnData.PubKeys[i])
+	// }
+
+	// This is carried out by trustees
 	// If getReadRequest returns True -- read transaction valid / logged in the skipchain
+	// writeID is the hash of the write txn block
+	// readID is the hash of the read txn block
 	readID := sbRead.Hash
-	hc, _ := getReadRequest(scurl, dataID, readID)
-	fmt.Println("hash check:", hc)
+	// diffWriteID := sbWriteDiff.Hash
+	hc, err := getReadTransaction(scurl, writeID, readID)
+	// hc, err := getReadTransaction(scurl, diffWriteID, readID)
 
-	decShares, _ := getDecryptShares(el, writeTxnData.H, writeTxnData.EncShares, writeTxnData.EncProofs)
-	// decShares := getDecryptShares(el, dataPVSS.H, dataPVSS.EncShares, dataPVSS.EncProofs)
+	// hc, err := getReadRequest(scurl, writeID, readID)
+	// TODO: Is it necessary to check both?
+	if hc != 1 || err != nil {
+		log.Errorf("Could not find valid read transaction: %v", err)
+		os.Exit(1)
+	}
+	// fmt.Println("hash check:", hc)
+
+	decShares, err := getDecryptShares(el, writeTxnData.H, writeTxnData.EncShares, writeTxnData.EncProofs)
+	if err != nil {
+		log.Errorf("Could not decrypt shares: %v", err)
+		os.Exit(1)
+	}
 
 	var validKeys []abstract.Point
 	var validEncShares []*pvss.PubVerShare
 	var validDecShares []*pvss.PubVerShare
 
-	sz = len(decShares)
+	sz := len(decShares)
 	for i := 0; i < sz; i++ {
 		if decShares != nil {
 			validKeys = append(validKeys, writeTxnData.PubKeys[i])
@@ -113,7 +160,10 @@ func main() {
 	recSecret, err := pvss.RecoverSecret(dataPVSS.Suite, writeTxnData.G, validKeys, validEncShares, validDecShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
 	// recSecret, err := pvss.RecoverSecret(dataPVSS.Suite, dataPVSS.G, dataPVSS.PublicKeys, dataPVSS.EncShares, decShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
 
-	log.ErrFatal(err)
+	if err != nil {
+		log.Errorf("Could not recover secret: %v", err)
+		os.Exit(1)
+	}
 
 	G_s := dataPVSS.Suite.Point().Mul(nil, dataPVSS.Secret)
 	fmt.Println("G_s is:\n", G_s)
@@ -125,9 +175,8 @@ func main() {
 func getDecryptShares(el *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) ([]*pvss.PubVerShare, error) {
 
 	cl := ds.NewClient()
+	defer cl.Close()
 	decShares, err := cl.Decshare(el, h, encShares, polyCommits)
-	// log.ErrFatal(err)
-	cl.Close()
 
 	if err != nil {
 		return decShares, err
@@ -143,12 +192,12 @@ func getDecryptShares(el *onet.Roster, h abstract.Point, encShares []*pvss.PubVe
 	return decShares, nil
 }
 
-func getReadRequest(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, readID skipchain.SkipBlockID) (int, error) {
+func getReadTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, readID skipchain.SkipBlockID) (int, error) {
 
 	cl := ocs.NewClient()
-	rd, err := cl.GetReadRequests(scurl, dataID, 0)
-	// log.ErrFatal(err)
-	cl.Close()
+	defer cl.Close()
+	rd, err := cl.GetReadTransaction(scurl, dataID)
+	// rd, err := cl.GetReadRequests(scurl, dataID, 0)
 
 	if err != nil {
 		return 0, err
@@ -186,8 +235,8 @@ func getReadRequest(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, readI
 func getWriteTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) (wtd *WriteTransactionData, err error) {
 
 	cl := ocs.NewClient()
+	defer cl.Close()
 	tmpTxn, err := cl.GetWriteTransaction(scurl, dataID)
-	cl.Close()
 
 	if err != nil {
 		// log.Errorf("Couldn't get write transaction: %v", err)
@@ -207,21 +256,21 @@ func getWriteTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) 
 func createReadTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, privKey abstract.Scalar) (sb *skipchain.SkipBlock, err error) {
 
 	cl := ocs.NewClient()
+	defer cl.Close()
 	sb, cerr := cl.ReadTransactionRequest(scurl, dataID, privKey)
-	cl.Close()
 	return sb, cerr
 }
 
 func createWriteTransaction(scurl *ocs.SkipChainURL, dp *DataPVSS, pubKey abstract.Point) (sb *skipchain.SkipBlock, err error) {
 
 	cl := ocs.NewClient()
+	defer cl.Close()
 	readList := make([]abstract.Point, 1)
 	readList = append(readList, pubKey)
 	sb, err = cl.WriteTransactionRequest(scurl, dp.EncShares, dp.EncProofs, dp.PublicKeys, dp.G, dp.H, readList)
 	// if err != nil {
 	// 	log.Errorf("Couldn't create write transaction: %v", err)
 	// }
-	cl.Close()
 	return sb, err
 }
 
@@ -231,8 +280,8 @@ func createSkipchain(groupToml *string) (scurl *ocs.SkipChainURL, err error) {
 	log.Lvl3(gr)
 
 	cl := ocs.NewClient()
+	defer cl.Close()
 	scurl, err = cl.CreateSkipchain(gr.Roster)
-	cl.Close()
 	return scurl, err
 }
 
@@ -275,11 +324,14 @@ func setupPVSS(pubKeys []abstract.Point) (dp *DataPVSS, err error) {
 // This function can replace the service for polling
 // the servers to collect their public keys.
 //
-func getPubKeys(fname *string) []abstract.Point {
+func getPubKeys(fname *string) ([]abstract.Point, error) {
 
 	var keys []abstract.Point
-	fh, _ := os.Open(*fname)
+	fh, err := os.Open(*fname)
 	defer fh.Close()
+	if err != nil {
+		return nil, err
+	}
 	fs := bufio.NewScanner(fh)
 
 	for fs.Scan() {
@@ -287,7 +339,7 @@ func getPubKeys(fname *string) []abstract.Point {
 		keys = append(keys, tmp)
 	}
 
-	return keys
+	return keys, nil
 }
 
 // func getPubKeys(el *onet.Roster) []abstract.Point {

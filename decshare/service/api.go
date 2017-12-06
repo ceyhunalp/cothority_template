@@ -16,7 +16,6 @@ func NewClient() *Client {
 }
 
 func (c *Client) Decshare(r *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, encProofs []abstract.Point) ([]*pvss.PubVerShare, onet.ClientError) {
-	// func (c *Client) Decshare(r *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) ([]abstract.Point, onet.ClientError) {
 
 	decshareReq := &DecshareRequest{
 		Roster:    r,
