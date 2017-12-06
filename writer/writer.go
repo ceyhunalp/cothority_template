@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"os"
@@ -55,8 +56,10 @@ func main() {
 	dataPVSS, err := setupPVSS(pubKeys)
 
 	//TODO: Use symKey to encrypt data
-	// g_s, _ := dataPVSS.Suite.Point().Mul(nil, dataPVSS.Secret).MarshalBinary()
-	// symKey := sha256.Sum256(g_s)
+	mesg := "Hello world!"
+	encMesg, hashEnc := encryptMessage(dataPVSS, &mesg)
+
+	fmt.Println(encMesg)
 
 	if err != nil {
 		log.Errorf("Could not setup PVSS: %v", err)
@@ -82,7 +85,7 @@ func main() {
 	// }
 
 	// Creating write transaction
-	sbWrite, err := createWriteTransaction(scurl, dataPVSS, pubKey)
+	sbWrite, err := createWriteTransaction(scurl, dataPVSS, hashEnc, pubKey)
 	if err != nil {
 		log.Errorf("Could not create write transaction: %v", err)
 		os.Exit(1)
@@ -93,6 +96,15 @@ func main() {
 	writeTxnData, err := getWriteTransaction(scurl, sbWrite.Hash)
 	if err != nil {
 		log.Errorf("Could not retrieve write transaction: %v", err)
+		os.Exit(1)
+	}
+
+	validHash := verifyEncMesg(writeTxnData, encMesg)
+
+	if validHash == 0 {
+		fmt.Println("Valid hash for encrypted message")
+	} else {
+		log.Errorf("Invalid hash for encrypted message")
 		os.Exit(1)
 	}
 
@@ -165,10 +177,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	G_s := dataPVSS.Suite.Point().Mul(nil, dataPVSS.Secret)
-	fmt.Println("G_s is:\n", G_s)
-	fmt.Println("==================")
-	fmt.Println("Recovered secret is:\n", recSecret)
+	// G_s := dataPVSS.Suite.Point().Mul(nil, dataPVSS.Secret)
+	// fmt.Println("G_s is:\n", G_s)
+	// fmt.Println("==================")
+	// fmt.Println("Recovered secret is:\n", recSecret)
+
+	recvMesg := decryptMessage(recSecret, encMesg, writeTxnData, dataPVSS)
+	fmt.Println("Recovered message is:", recvMesg)
 }
 
 // func getDecryptShares(el *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) []abstract.Point {
@@ -248,6 +263,7 @@ func getWriteTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) 
 		EncProofs: tmpTxn.EncProofs,
 		G:         tmpTxn.G,
 		H:         tmpTxn.H,
+		HashEnc:   tmpTxn.HashEnc,
 		PubKeys:   tmpTxn.PubKeys,
 	}
 	return wtd, nil
@@ -261,13 +277,13 @@ func createReadTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID
 	return sb, cerr
 }
 
-func createWriteTransaction(scurl *ocs.SkipChainURL, dp *DataPVSS, pubKey abstract.Point) (sb *skipchain.SkipBlock, err error) {
+func createWriteTransaction(scurl *ocs.SkipChainURL, dp *DataPVSS, hashEnc []byte, pubKey abstract.Point) (sb *skipchain.SkipBlock, err error) {
 
 	cl := ocs.NewClient()
 	defer cl.Close()
 	readList := make([]abstract.Point, 1)
 	readList = append(readList, pubKey)
-	sb, err = cl.WriteTransactionRequest(scurl, dp.EncShares, dp.EncProofs, dp.PublicKeys, dp.G, dp.H, readList)
+	sb, err = cl.WriteTransactionRequest(scurl, dp.EncShares, dp.EncProofs, dp.PublicKeys, dp.G, dp.H, hashEnc, readList)
 	// if err != nil {
 	// 	log.Errorf("Couldn't create write transaction: %v", err)
 	// }
@@ -283,6 +299,37 @@ func createSkipchain(groupToml *string) (scurl *ocs.SkipChainURL, err error) {
 	defer cl.Close()
 	scurl, err = cl.CreateSkipchain(gr.Roster)
 	return scurl, err
+}
+
+func verifyEncMesg(wtd *WriteTransactionData, encMesg []byte) int {
+
+	tmpHash := sha256.Sum256(encMesg)
+	cmptHash := tmpHash[:]
+	return bytes.Compare(cmptHash, wtd.HashEnc)
+}
+
+func decryptMessage(recSecret abstract.Point, encMesg []byte, wtd *WriteTransactionData, dp *DataPVSS) (mesg string) {
+
+	g_s, _ := recSecret.MarshalBinary()
+	tempSymKey := sha256.Sum256(g_s)
+	symKey := tempSymKey[:]
+	cipher := network.Suite.Cipher(symKey)
+	decMesg, _ := cipher.Open(nil, encMesg)
+	mesg = string(decMesg)
+	return mesg
+}
+
+func encryptMessage(dp *DataPVSS, msg *string) (encMesg []byte, hashEnc []byte) {
+
+	mesg := []byte(*msg)
+	g_s, _ := dp.Suite.Point().Mul(nil, dp.Secret).MarshalBinary()
+	tempSymKey := sha256.Sum256(g_s)
+	symKey := tempSymKey[:]
+	cipher := network.Suite.Cipher(symKey)
+	encMesg = cipher.Seal(nil, mesg)
+	tempHash := sha256.Sum256(encMesg)
+	hashEnc = tempHash[:]
+	return encMesg, hashEnc
 }
 
 func setupPVSS(pubKeys []abstract.Point) (dp *DataPVSS, err error) {

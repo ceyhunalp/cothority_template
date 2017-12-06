@@ -25,4 +25,5 @@ type WriteTransactionData struct {
 	PubKeys   []abstract.Point
 	G         abstract.Point
 	H         abstract.Point
+	HashEnc   []byte
 }
