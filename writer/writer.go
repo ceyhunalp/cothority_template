@@ -56,10 +56,9 @@ func main() {
 	dataPVSS, err := setupPVSS(pubKeys)
 
 	//TODO: Use symKey to encrypt data
-	mesg := "Hello world!"
+	mesg := "Dunyali dostum, tam olarak anlamadin galiba. KACIRILDIN!"
+	log.Info("Plaintext message is:", mesg)
 	encMesg, hashEnc := encryptMessage(dataPVSS, &mesg)
-
-	fmt.Println(encMesg)
 
 	if err != nil {
 		log.Errorf("Could not setup PVSS: %v", err)
@@ -75,14 +74,6 @@ func main() {
 		log.Errorf("Could not create skipchain: %v", err)
 		os.Exit(1)
 	}
-	// fmt.Println(scurl.Genesis)
-
-	// tmpEncShares, pubPoly, _ := pvss.EncShares(suite, H, pubKeys, s, t)
-	// sz := len(tmpEncShares)
-	// encShares := make([]pvss.PubVerShare, sz)
-	// for i := 0; i < sz; i++ {
-	// 	encShares[i] = *tmpEncShares[i]
-	// }
 
 	// Creating write transaction
 	sbWrite, err := createWriteTransaction(scurl, dataPVSS, hashEnc, pubKey)
@@ -90,7 +81,11 @@ func main() {
 		log.Errorf("Could not create write transaction: %v", err)
 		os.Exit(1)
 	}
+
 	// fmt.Println("sbWrite hash is", sbWrite.Hash)
+	// fmt.Println("sbWrite fwd len is", sbWrite.GetForwardLen())
+	// fmt.Println("sbWrite index is", sbWrite.Index)
+	// fmt.Println("sbwrite bcklink", sbWrite.BackLinkIDs[0].Short())
 
 	// Get write transaction from skipchain
 	writeTxnData, err := getWriteTransaction(scurl, sbWrite.Hash)
@@ -102,7 +97,7 @@ func main() {
 	validHash := verifyEncMesg(writeTxnData, encMesg)
 
 	if validHash == 0 {
-		fmt.Println("Valid hash for encrypted message")
+		log.Info("Valid hash for encrypted message")
 	} else {
 		log.Errorf("Invalid hash for encrypted message")
 		os.Exit(1)
@@ -113,7 +108,6 @@ func main() {
 	// sbWriteDiff, _ := createWriteTransaction(scurl, dataPVSS, diffPk)
 	// fmt.Println("sbWriteDiff hash is", sbWriteDiff.Hash)
 
-	// TODO: Reader first checks H'=H(c) ?= H_c in the write transaction
 	// Creating read transaction
 	writeID := sbWrite.Hash
 	sbRead, err := createReadTransaction(scurl, writeID, privKey)
@@ -123,32 +117,37 @@ func main() {
 		log.Errorf("Could not create read transaction: %v", err)
 		os.Exit(1)
 	}
-	// fmt.Println("sbRead hash is", sbRead.Hash)
-	// fmt.Println("sbRead skipchain id is", sbRead.SkipChainID())
 
-	// sz := len(writeTxnData.PubKeys)
-	// for i := 0; i < sz; i++ {
-	// 	fmt.Println(writeTxnData.PubKeys[i])
-	// }
+	fmt.Println("sbRead hash is", sbRead.Hash)
+	fmt.Println("sbRead fwd len is", sbRead.GetForwardLen())
+	fmt.Println("sbRead index is", sbRead.Index)
+	fmt.Println("sbread bcklink", sbRead.BackLinkIDs[0].Short())
 
 	// This is carried out by trustees
 	// If getReadRequest returns True -- read transaction valid / logged in the skipchain
 	// writeID is the hash of the write txn block
 	// readID is the hash of the read txn block
+
 	readID := sbRead.Hash
-	// diffWriteID := sbWriteDiff.Hash
-	hc, err := getReadTransaction(scurl, writeID, readID)
-	// hc, err := getReadTransaction(scurl, diffWriteID, readID)
+	// // diffWriteID := sbWriteDiff.Hash
+	// hc, err := getReadTransaction(scurl, writeID, readID)
+	// // hc, err := getReadTransaction(scurl, diffWriteID, readID)
+	//
+	// // hc, err := getReadRequest(scurl, writeID, readID)
+	// // TODO: Is it necessary to check both?
+	// if hc != 1 || err != nil {
+	// 	log.Errorf("Could not find valid read transaction: %v", err)
+	// 	os.Exit(1)
+	// }
 
-	// hc, err := getReadRequest(scurl, writeID, readID)
-	// TODO: Is it necessary to check both?
-	if hc != 1 || err != nil {
-		log.Errorf("Could not find valid read transaction: %v", err)
-		os.Exit(1)
-	}
-	// fmt.Println("hash check:", hc)
+	updWriteBlk, _ := getUpdatedBlock(scurl, writeID)
+	fmt.Println("Forward link is:", updWriteBlk.ForwardLink[0].Hash.Short())
 
-	decShares, err := getDecryptShares(el, writeTxnData.H, writeTxnData.EncShares, writeTxnData.EncProofs)
+	scPubKeys := sbRead.Roster.Publics()
+
+	testSkipchain(scurl, dataPVSS)
+
+	decShares, err := getDecryptShares(el, scurl, updWriteBlk, scPubKeys, updWriteBlk.Hash, readID, sbRead.SkipBlockFix, sbRead.Index, writeTxnData.H, writeTxnData.EncShares, writeTxnData.EncProofs)
 	if err != nil {
 		log.Errorf("Could not decrypt shares: %v", err)
 		os.Exit(1)
@@ -167,8 +166,6 @@ func main() {
 		}
 	}
 
-	// TODO: suite, threshold and numTrustee add to write transaction?
-
 	recSecret, err := pvss.RecoverSecret(dataPVSS.Suite, writeTxnData.G, validKeys, validEncShares, validDecShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
 	// recSecret, err := pvss.RecoverSecret(dataPVSS.Suite, dataPVSS.G, dataPVSS.PublicKeys, dataPVSS.EncShares, decShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
 
@@ -177,31 +174,89 @@ func main() {
 		os.Exit(1)
 	}
 
-	// G_s := dataPVSS.Suite.Point().Mul(nil, dataPVSS.Secret)
-	// fmt.Println("G_s is:\n", G_s)
-	// fmt.Println("==================")
-	// fmt.Println("Recovered secret is:\n", recSecret)
-
 	recvMesg := decryptMessage(recSecret, encMesg, writeTxnData, dataPVSS)
-	fmt.Println("Recovered message is:", recvMesg)
+	log.Info("Recovered message is:", recvMesg)
+
+	// _, msg, _ := network.Unmarshal(sbRead.Data)
+	// abbas := msg.(*ocs.DataOCS)
+	// fmt.Println(abbas.Read.DataID)
+}
+
+func testSkipchain(scurl *ocs.SkipChainURL, dp *DataPVSS) {
+
+	mesg := "Alev seklinde bir top ya da top seklinde bir alev."
+	log.Info("Plaintext message is:", mesg)
+	encMesg, hashEnc := encryptMessage(dp, &mesg)
+	log.Lvl3(encMesg)
+	count := 5
+	readerSK := make([]abstract.Scalar, count)
+	readerPK := make([]abstract.Point, count)
+	sbWrite := make([]*skipchain.SkipBlock, count)
+	sbRead := make([]*skipchain.SkipBlock, count)
+
+	for i := 0; i < count; i++ {
+		readerSK[i] = dp.Suite.Scalar().Pick(random.Stream)
+		readerPK[i] = dp.Suite.Point().Mul(nil, readerSK[i])
+		tmp, _ := createWriteTransaction(scurl, dp, hashEnc, readerPK[i])
+		sbWrite[i] = tmp
+	}
+
+	for i := 0; i < count-1; i++ {
+		tmp, _ := createReadTransaction(scurl, sbWrite[i].Hash, readerSK[i])
+		sbRead[i] = tmp
+	}
+
+	// for i := 0; i < count; i++ {
+	// 	fmt.Println("hash is", sbWrite[i].Data)
+	// 	fmt.Println("fwd len is", sbWrite[i].GetForwardLen())
+	// 	fmt.Println("bward link is", sbWrite[i].BackLinkIDs[0])
+	// 	// fmt.Println("sprint is", sbWrite[i].Sprint(false))
+	// 	fmt.Println("index is", sbWrite[i].Index)
+	// 	fmt.Println("=====================================")
+	// }
+
+}
+
+func getUpdatedBlock(scurl *ocs.SkipChainURL, sbid skipchain.SkipBlockID) (*skipchain.SkipBlock, error) {
+
+	cl := skipchain.NewClient()
+	defer cl.Close()
+	sb, cerr := cl.GetSingleBlock(scurl.Roster, sbid)
+	if cerr != nil {
+		return nil, cerr
+	}
+	return sb, nil
 }
 
 // func getDecryptShares(el *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) []abstract.Point {
-func getDecryptShares(el *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) ([]*pvss.PubVerShare, error) {
+func getDecryptShares(el *onet.Roster, scurl *ocs.SkipChainURL, writeBlk *skipchain.SkipBlock, scPubKeys []abstract.Point, writeHash skipchain.SkipBlockID, readHash skipchain.SkipBlockID, readBlkHdr *skipchain.SkipBlockFix, index int, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) ([]*pvss.PubVerShare, error) {
 
 	cl := ds.NewClient()
 	defer cl.Close()
-	decShares, err := cl.Decshare(el, h, encShares, polyCommits)
 
-	if err != nil {
-		return decShares, err
+	idx := index - writeBlk.Index - 1
+	if idx < 0 {
+		log.Fatal("ForwardLink index is negative")
+		os.Exit(1)
+	}
+	fwdLink := writeBlk.GetForward(idx)
+
+	if fwdLink == nil {
+		log.Errorf("Forward does not exist")
+		os.Exit(1)
 	}
 
-	size := len(decShares)
-	for i := 0; i < size/2; i++ {
-		tmp := decShares[size-i-1]
-		decShares[size-i-1] = decShares[i]
-		decShares[i] = tmp
+	tmpDecShares, err := cl.Decshare(el, h, encShares, polyCommits, fwdLink, scPubKeys, writeHash, readHash, readBlkHdr)
+
+	if err != nil {
+		return tmpDecShares, err
+	}
+
+	size := len(tmpDecShares)
+	decShares := make([]*pvss.PubVerShare, size)
+
+	for i := 0; i < size; i++ {
+		decShares[tmpDecShares[i].S.I] = tmpDecShares[i]
 	}
 
 	return decShares, nil
@@ -232,7 +287,7 @@ func getReadTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, r
 	*/
 	if sz > 0 {
 		readDoc := rd[0]
-		fmt.Println("ReadDoc hash is", readDoc.ReadID)
+		// fmt.Println("ReadDoc hash is", readDoc.ReadID)
 		hashCheck := bytes.Compare(readID, readDoc.ReadID)
 		if hashCheck == 0 {
 			log.Lvl3("Matching hash values")

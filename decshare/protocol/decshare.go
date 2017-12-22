@@ -3,7 +3,11 @@ package protocol
 import (
 	"errors"
 
+	ocs "github.com/dedis/onchain-secrets"
+
+	"github.com/dedis/cothority/skipchain"
 	"gopkg.in/dedis/crypto.v0/abstract"
+	"gopkg.in/dedis/crypto.v0/cosi"
 	"gopkg.in/dedis/crypto.v0/share/pvss"
 	"gopkg.in/dedis/onet.v1"
 	"gopkg.in/dedis/onet.v1/log"
@@ -18,99 +22,152 @@ func init() {
 	onet.GlobalProtocolRegister(Name, NewProtocol)
 }
 
-type DecshareChannelStruct struct {
+type ProtocolPVSSDecrypt struct {
 	*onet.TreeNodeInstance
-	Message         string
 	DecShares       chan []*pvss.PubVerShare
 	ChannelAnnounce chan StructAnnounceDecrypt
 	ChannelReply    chan []StructDecryptReply
 	H               abstract.Point
 	EncShares       []*pvss.PubVerShare
 	EncProofs       []abstract.Point
+	FwdLink         *skipchain.BlockLink
+	ScPubKeys       []abstract.Point
+	WriteHash       skipchain.SkipBlockID
+	ReadHash        skipchain.SkipBlockID
+	ReadBlkHdr      *skipchain.SkipBlockFix
+	RootIndex       int
 }
 
 func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
 
-	DecshareChannels := &DecshareChannelStruct{
+	PVSSDecrypt := &ProtocolPVSSDecrypt{
 		TreeNodeInstance: n,
 		DecShares:        make(chan []*pvss.PubVerShare),
 	}
-	err := DecshareChannels.RegisterChannel(&DecshareChannels.ChannelAnnounce)
+	err := PVSSDecrypt.RegisterChannel(&PVSSDecrypt.ChannelAnnounce)
 	if err != nil {
 		return nil, errors.New("couldn't register announcement-channel: " + err.Error())
 	}
-	err = DecshareChannels.RegisterChannel(&DecshareChannels.ChannelReply)
+	err = PVSSDecrypt.RegisterChannel(&PVSSDecrypt.ChannelReply)
 	if err != nil {
 		return nil, errors.New("couldn't register reply-channel: " + err.Error())
 	}
-	return DecshareChannels, nil
+	return PVSSDecrypt, nil
 }
 
-func (p *DecshareChannelStruct) Start() error {
-	log.Lvl3("Starting DecshareChannels")
-	p.ChannelAnnounce <- StructAnnounceDecrypt{nil, AnnounceDecrypt{
-		H:         p.H,
-		EncShares: p.EncShares,
-		EncProofs: p.EncProofs,
-	}}
+func (p *ProtocolPVSSDecrypt) Start() error {
+	log.Lvl3("Starting PVSSDecrypt")
+
+	for _, c := range p.Children() {
+		idx := c.RosterIndex
+		if idx <= p.RootIndex {
+			idx--
+		}
+
+		err := p.SendTo(c, &AnnounceDecrypt{
+			H:          p.H,
+			EncShare:   p.EncShares[idx],
+			EncProof:   p.EncProofs[idx],
+			FwdLink:    p.FwdLink,
+			ScPubKeys:  p.ScPubKeys,
+			ReadHash:   p.ReadHash,
+			WriteHash:  p.WriteHash,
+			ReadBlkHdr: p.ReadBlkHdr,
+		})
+		if err != nil {
+			log.Error(p.Info(), "failed to send to", c.Name(), err)
+		}
+	}
+
 	return nil
 }
 
-func (p *DecshareChannelStruct) Dispatch() error {
-	var decShares []*pvss.PubVerShare
-	var tmp *pvss.PubVerShare
-	var err error
-
-	idx := p.Index()
-	announcement := <-p.ChannelAnnounce
+func (p *ProtocolPVSSDecrypt) Dispatch() error {
 
 	if p.IsLeaf() {
-		tmp, err = pvss.DecShare(network.Suite, announcement.H, p.Public(), announcement.EncProofs[idx], p.Private(), announcement.EncShares[idx])
-		log.Info("Error is", err)
+		announcement := <-p.ChannelAnnounce
+		validSignErr := verifyDecryptionRequest(announcement.FwdLink, announcement.ScPubKeys, announcement.WriteHash, announcement.ReadHash, announcement.ReadBlkHdr)
+		if validSignErr != nil {
+			log.Error(p.Info(), "Failed to verify forward link", validSignErr)
+			return nil
+		}
+		ds, err := pvss.DecShare(network.Suite, announcement.H, p.Public(), announcement.EncProof, p.Private(), announcement.EncShare)
+		// log.Info("Error is", err)
 		if err != nil {
 			log.Error(p.Info(), "Failed to decrypt share", p.Parent().Name(), err)
 		}
-		decShares = append(decShares, tmp)
-		err = p.SendTo(p.Parent(), &DecryptReply{decShares})
+		err = p.SendTo(p.Parent(), &DecryptReply{ds})
 		if err != nil {
 			log.Error(p.Info(), "Failed to send reply to", p.Parent().Name(), err)
 		}
 		return nil
 	}
 
-	for _, c := range p.Children() {
-		err := p.SendTo(c, &announcement.AnnounceDecrypt)
-		if err != nil {
-			log.Error(p.Info(), "failed to send to", c.Name(), err)
-		}
-	}
-
+	var decShares []*pvss.PubVerShare
+	idx := p.RootIndex
 	reply := <-p.ChannelReply
 
 	for _, c := range reply {
-		for _, tmp := range c.DecShare {
-			decShares = append(decShares, tmp)
-		}
+		decShares = append(decShares, c.DecryptReply.DecShare)
+	}
+
+	validSignErr := verifyDecryptionRequest(p.FwdLink, p.ScPubKeys, p.WriteHash, p.ReadHash, p.ReadBlkHdr)
+	if validSignErr != nil {
+		log.Error(p.Info(), "Failed to verify forward link", validSignErr)
+		return nil
+	}
+	ds, err := pvss.DecShare(network.Suite, p.H, p.Public(), p.EncProofs[idx], p.Private(), p.EncShares[idx])
+	// log.Info("Error is", err)
+	if err != nil {
+		log.Error(p.Info(), "Failed to decrypt share", p.Parent().Name(), err)
 	}
 
 	log.Lvl3(p.ServerIdentity().Address, "is done with total of", len(decShares))
 
-	tmp, err = pvss.DecShare(network.Suite, announcement.H, p.Public(), announcement.EncProofs[idx], p.Private(), announcement.EncShares[idx])
-	log.Info("Error is", err)
-	if err != nil {
-		log.Error(p.Info(), "Failed to decrypt share", p.Parent().Name(), err)
-	}
-	decShares = append(decShares, tmp)
+	decShares = append(decShares, ds)
+	p.DecShares <- decShares
+	return nil
+}
 
-	if !p.IsRoot() {
-		log.Lvl3("Sending to parent")
-		err := p.SendTo(p.Parent(), &DecryptReply{decShares})
-		if err != nil {
-			log.Error(p.Info(), "failed to reply to", p.Parent().Name(), err)
-		}
-	} else {
-		log.Lvl3("Root-node is done - nbr of keys:", len(decShares))
-		p.DecShares <- decShares
+func verifyDecryptionRequest(bl *skipchain.BlockLink, publics []abstract.Point, writeHash skipchain.SkipBlockID, readHash skipchain.SkipBlockID, readBlkHdr *skipchain.SkipBlockFix) error {
+
+	if len(bl.Signature) == 0 {
+		return errors.New("No signature present" + log.Stack())
 	}
+
+	hc := bl.Hash.Equal(readHash)
+
+	if !hc {
+		log.Lvl3("Forward link hash does not match read transaction hash")
+		return errors.New("Forward link hash does not match read transaction hash")
+	}
+
+	log.Lvl3("Forward link hash matches read transaction hash")
+
+	signErr := cosi.VerifySignature(network.Suite, publics, bl.Hash, bl.Signature)
+
+	if signErr != nil {
+		return signErr
+	}
+
+	readBlkHash := readBlkHdr.CalculateHash()
+	_, tmp, _ := network.Unmarshal(readBlkHdr.Data)
+	readBlk := tmp.(*ocs.DataOCS).Read
+
+	hc = readBlkHash.Equal(readHash)
+
+	if !hc {
+		log.Lvl3("Hash in read block header not valid")
+		return errors.New("Hash in read block header not valid")
+	}
+
+	log.Lvl3("Valid hash in read block header")
+
+	hc = readBlk.DataID.Equal(writeHash)
+	if !hc {
+		log.Lvl3("Invalid write block hash in the read block")
+		return errors.New("Invalid write block hash in the read block")
+	}
+
 	return nil
 }
