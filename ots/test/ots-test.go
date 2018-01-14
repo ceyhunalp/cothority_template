@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
 
 	ots "github.com/dedis/cothority_template/ots"
@@ -31,10 +30,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// for i := 0; i < len(el.List); i++ {
-	// 	fmt.Println(el.List[i])
-	// }
-
 	pubKeys, err := ots.GetPubKeys(pkFilePtr)
 
 	if err != nil {
@@ -54,6 +49,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Writer's pk/sk pair
+	wrPrivKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
+	wrPubKey := dataPVSS.Suite.Point().Mul(nil, wrPrivKey)
+
 	// Reader's pk/sk pair
 	privKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	pubKey := dataPVSS.Suite.Point().Mul(nil, privKey)
@@ -68,41 +67,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ots.TestSkipchain(scurl, dataPVSS)
+
 	// Creating write transaction
-	sbWrite, err := ots.CreateWriteTransaction(scurl, dataPVSS, hashEnc, pubKey)
+	writeSB, err := ots.CreateWriteTxn(scurl, dataPVSS, hashEnc, pubKey, wrPrivKey)
 	if err != nil {
 		log.Errorf("Could not create write transaction: %v", err)
 		os.Exit(1)
 	}
 
 	// Bob gets it from Alice
-	writeID := sbWrite.Hash
-
-	// fmt.Println("sbWrite hash is", sbWrite.Hash)
-	// fmt.Println("sbWrite fwd len is", sbWrite.GetForwardLen())
-	// fmt.Println("sbWrite index is", sbWrite.Index)
-	// fmt.Println("sbwrite bcklink", sbWrite.BackLinkIDs[0].Short())
+	writeID := writeSB.Hash
 
 	// Get write transaction from skipchain
-	writeTxnData, err := ots.GetWriteTransaction(scurl, writeID)
+	writeSB, writeTxnData, sig, err := ots.GetWriteTxnSB(scurl, writeID)
 	if err != nil {
-		log.Errorf("Could not retrieve write transaction: %v", err)
+		log.Errorf("Could not retrieve write transaction block: %v", err)
 		os.Exit(1)
 	}
 
-	// Verify encrypted shares
+	// writeTxnData.ReaderPk = wrPubKey
+	sigVerErr := ots.VerifyTxnSignature(writeTxnData, sig, wrPubKey)
 
-	_, verifiedEncShares, err := pvss.VerifyEncShareBatch(network.Suite, writeTxnData.H, writeTxnData.PublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
-
-	if err != nil {
-		log.Errorf("Could not verify encrypted shares: %v", err)
+	if sigVerErr != nil {
+		log.Error("Signature verification failed on the write transaction")
 		os.Exit(1)
 	}
 
-	if len(verifiedEncShares) != len(writeTxnData.EncShares) {
-		log.Errorf("Invalid encrypted shares in the write transaction")
-		os.Exit(1)
-	}
+	log.Info("Signature verified on the retrieved write transaction")
 
 	validHash := ots.VerifyEncMesg(writeTxnData, encMesg)
 
@@ -113,39 +105,47 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Verify encrypted shares
+	_, _, err = pvss.VerifyEncShareBatch(network.Suite, writeTxnData.H, writeTxnData.PublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
+
+	if err != nil {
+		log.Errorf("Could not verify encrypted shares in the write transaction: %v", err)
+		os.Exit(1)
+	}
+
+	// if len(verifiedEncShares) != len(writeTxnData.EncShares) {
+	// 	log.Errorf("Invalid encrypted shares in the write transaction")
+	// 	os.Exit(1)
+	// }
+
 	// diffSk := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	// diffPk := dataPVSS.Suite.Point().Mul(nil, diffSk)
-	// sbWriteDiff, _ := createWriteTransaction(scurl, dataPVSS, diffPk)
+	// sbWriteDiff, _ := createWriteTxn(scurl, dataPVSS, diffPk)
 	// fmt.Println("sbWriteDiff hash is", sbWriteDiff.Hash)
 
 	// Creating read transaction
-	sbRead, err := ots.CreateReadTransaction(scurl, writeID, privKey)
+	readSB, err := ots.CreateReadTxn(scurl, writeID, privKey)
 	// TESTING!
-	// sbRead, err := createReadTransaction(scurl, writeID, diffSk)
+	// sbRead, err := createReadTxn(scurl, writeID, diffSk)
 	if err != nil {
 		log.Errorf("Could not create read transaction: %v", err)
 		os.Exit(1)
 	}
 
-	// fmt.Println("sbRead hash is", sbRead.Hash)
-	// fmt.Println("sbRead fwd len is", sbRead.GetForwardLen())
-	// fmt.Println("sbRead index is", sbRead.Index)
-	// fmt.Println("sbread bcklink", sbRead.BackLinkIDs[0].Short())
-
-	// This is carried out by trustees
 	// writeID is the hash of the write txn block
 	// readID is the hash of the read txn block
+	// log.Info("In client read txn:", readSB.Hash)
 
-	readID := sbRead.Hash
+	updWriteSB, _ := ots.GetUpdatedWriteTxnSB(scurl, writeID)
+	acPubKeys := readSB.Roster.Publics()
+	scPubKeys := writeTxnData.PublicKeys
+	// ots.TestSkipchain(scurl, dataPVSS)
+	// diffSk := dataPVSS.Suite.Scalar().Pick(random.Stream)
 
-	updWriteBlk, _ := ots.GetUpdatedBlock(scurl, writeID)
-	fmt.Println("Forward link is:", updWriteBlk.ForwardLink[0].Hash.Short())
+	decShares, err := ots.GetDecryptShares(scurl, el, updWriteSB, readSB.SkipBlockFix, acPubKeys, scPubKeys, privKey, readSB.Index)
 
-	scPubKeys := sbRead.Roster.Publics()
-
-	ots.TestSkipchain(scurl, dataPVSS)
-
-	decShares, err := ots.GetDecryptShares(scurl, el, writeTxnData.H, scPubKeys, writeTxnData.EncShares, writeTxnData.EncProofs, updWriteBlk, sbRead.Index, sbRead.SkipBlockFix, updWriteBlk.Hash, readID)
+	// decShares, err := ots.GetDecryptShares(scurl, el, h, acPubKeys, encShares, encProofs, writeBlk, index, readBlkHdr, writeHash, readHash, scPubKeys, privKey)
+	// decShares, err := ots.GetDecryptShares(scurl, el, writeTxnData.H, acPubKeys, writeTxnData.EncShares, writeTxnData.EncProofs, updWriteBlk, sbRead.Index, sbRead.SkipBlockFix, updWriteBlk.Hash, readID, writeTxnData.PublicKeys, privKey)
 
 	if err != nil {
 		log.Errorf("Could not decrypt shares: %v", err)

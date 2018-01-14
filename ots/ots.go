@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/dedis/cothority/skipchain"
+	"github.com/dedis/cothority_template/ots/util"
 	otssc "github.com/dedis/cothority_template/otssc/service"
 	ocs "github.com/dedis/onchain-secrets"
 	"gopkg.in/dedis/crypto.v0/abstract"
@@ -19,13 +20,14 @@ import (
 	"gopkg.in/dedis/onet.v1/network"
 )
 
-func TestSkipchain(scurl *ocs.SkipChainURL, dp *DataPVSS) {
+func TestSkipchain(scurl *ocs.SkipChainURL, dp *util.DataPVSS) {
 
 	mesg := "Bana istediginiz kadar gidip gelebilirsiniz."
-	log.Info("Plaintext message is:", mesg)
 	encMesg, hashEnc := EncryptMessage(dp, &mesg)
 	log.Lvl3(encMesg)
 	count := 5
+	writerSK := make([]abstract.Scalar, count)
+	writerPK := make([]abstract.Point, count)
 	readerSK := make([]abstract.Scalar, count)
 	readerPK := make([]abstract.Point, count)
 	sbWrite := make([]*skipchain.SkipBlock, count)
@@ -34,12 +36,14 @@ func TestSkipchain(scurl *ocs.SkipChainURL, dp *DataPVSS) {
 	for i := 0; i < count; i++ {
 		readerSK[i] = dp.Suite.Scalar().Pick(random.Stream)
 		readerPK[i] = dp.Suite.Point().Mul(nil, readerSK[i])
-		tmp, _ := CreateWriteTransaction(scurl, dp, hashEnc, readerPK[i])
+		writerSK[i] = dp.Suite.Scalar().Pick(random.Stream)
+		writerPK[i] = dp.Suite.Point().Mul(nil, writerSK[i])
+		tmp, _ := CreateWriteTxn(scurl, dp, hashEnc, readerPK[i], writerSK[i])
 		sbWrite[i] = tmp
 	}
 
 	for i := 0; i < count-1; i++ {
-		tmp, _ := CreateReadTransaction(scurl, sbWrite[i].Hash, readerSK[i])
+		tmp, _ := CreateReadTxn(scurl, sbWrite[i].Hash, readerSK[i])
 		sbRead[i] = tmp
 	}
 
@@ -54,29 +58,30 @@ func TestSkipchain(scurl *ocs.SkipChainURL, dp *DataPVSS) {
 
 }
 
-// func GetDecryptShares(el *onet.Roster, h abstract.Point, encShares []*pvss.PubVerShare, polyCommits []abstract.Point) []abstract.Point {
-func GetDecryptShares(scurl *ocs.SkipChainURL, el *onet.Roster, h abstract.Point, scPubKeys []abstract.Point, encShares []*pvss.PubVerShare, encProofs []abstract.Point, writeBlk *skipchain.SkipBlock, index int, readBlkHdr *skipchain.SkipBlockFix, writeHash skipchain.SkipBlockID, readHash skipchain.SkipBlockID) ([]*pvss.PubVerShare, error) {
+func GetDecryptShares(scurl *ocs.SkipChainURL, el *onet.Roster, writeTxnSB *skipchain.SkipBlock, readTxnSBF *skipchain.SkipBlockFix, acPubKeys []abstract.Point, scPubKeys []abstract.Point, privKey abstract.Scalar, index int) ([]*pvss.PubVerShare, error) {
 
 	cl := otssc.NewClient()
 	defer cl.Close()
 
-	idx := index - writeBlk.Index - 1
+	idx := index - writeTxnSB.Index - 1
 	if idx < 0 {
 		log.Fatal("ForwardLink index is negative")
 		os.Exit(1)
 	}
-	fwdLink := writeBlk.GetForward(idx)
+	merkleProof := writeTxnSB.GetForward(idx)
 
-	if fwdLink == nil {
+	if merkleProof == nil {
 		log.Errorf("Forward does not exist")
 		os.Exit(1)
 	}
 
-	tmpDecShares, err := cl.OTSDecrypt(el, h, scPubKeys, encShares, encProofs, fwdLink, readBlkHdr, writeHash, readHash)
+	tmpReencShares, err := cl.OTSDecrypt(el, writeTxnSB.SkipBlockFix, readTxnSBF, merkleProof, acPubKeys, privKey)
 
 	if err != nil {
-		return tmpDecShares, err
+		return nil, err
 	}
+
+	tmpDecShares := dhDecrypt(tmpReencShares, scPubKeys, privKey)
 
 	size := len(tmpDecShares)
 	decShares := make([]*pvss.PubVerShare, size)
@@ -88,7 +93,40 @@ func GetDecryptShares(scurl *ocs.SkipChainURL, el *onet.Roster, h abstract.Point
 	return decShares, nil
 }
 
-func GetUpdatedBlock(scurl *ocs.SkipChainURL, sbid skipchain.SkipBlockID) (*skipchain.SkipBlock, error) {
+func dhDecrypt(shares []*util.ReencryptedShare, scPubKeys []abstract.Point, privKey abstract.Scalar) []*pvss.PubVerShare {
+
+	// network.RegisterMessage(&pvss.PubVerShare{})
+	size := len(shares)
+	decShares := make([]*pvss.PubVerShare, size)
+
+	for i := 0; i < size; i++ {
+		tmp := shares[i]
+		shSec, err := network.Suite.Point().Mul(scPubKeys[tmp.Index], privKey).MarshalBinary()
+		log.Info("Shared secret in dhDecrypt:", shSec)
+		if err != nil {
+			log.Errorf("MarshalBinary failed: %v", err)
+			return nil
+		}
+		tempSymKey := sha256.Sum256(shSec)
+		symKey := tempSymKey[:]
+		cipher := network.Suite.Cipher(symKey)
+		decMesg, err := cipher.Open(nil, tmp.Data)
+		if err != nil {
+			log.Errorf("Decryption failed: %v", err)
+			return nil
+		}
+		_, tmpSh, err := network.Unmarshal(decMesg)
+		if err != nil {
+			log.Errorf("Failed unmarshaling: %v", err)
+			return nil
+		}
+		sh := tmpSh.(*pvss.PubVerShare)
+		decShares[i] = sh
+	}
+	return decShares
+}
+
+func GetUpdatedWriteTxnSB(scurl *ocs.SkipChainURL, sbid skipchain.SkipBlockID) (*skipchain.SkipBlock, error) {
 
 	cl := skipchain.NewClient()
 	defer cl.Close()
@@ -99,72 +137,56 @@ func GetUpdatedBlock(scurl *ocs.SkipChainURL, sbid skipchain.SkipBlockID) (*skip
 	return sb, nil
 }
 
-// Not used anymore
-// func GetReadTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, readID skipchain.SkipBlockID) (int, error) {
-//
-// 	cl := ocs.NewClient()
-// 	defer cl.Close()
-// 	rd, err := cl.GetReadTransaction(scurl, dataID)
-//
-// 	if err != nil {
-// 		return 0, err
-// 	}
-//
-// 	//TODO: What if returns multiple ReadDoc
-// 	//TODO: Returned error values
-// 	sz := len(rd)
-// 	if sz > 0 {
-// 		readDoc := rd[0]
-// 		hashCheck := bytes.Compare(readID, readDoc.ReadID)
-// 		if hashCheck == 0 {
-// 			log.Lvl3("Matching hash values")
-// 			return 1, nil
-// 		} else {
-// 			log.Lvl3("Different hash values")
-// 			return 0, err
-// 		}
-// 	} else {
-// 		log.Lvl3("No read transaction found for the given write transaction")
-// 		return 0, err
-// 	}
-// }
-
-func GetWriteTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) (wtd *WriteTransactionData, err error) {
+func CreateReadTxn(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, privKey abstract.Scalar) (sb *skipchain.SkipBlock, err error) {
 
 	cl := ocs.NewClient()
 	defer cl.Close()
-	tmpTxn, err := cl.GetWriteTransaction(scurl, dataID)
-
-	if err != nil {
-		return nil, err
-	}
-
-	wtd = &WriteTransactionData{
-		G:          tmpTxn.G,
-		H:          tmpTxn.H,
-		PublicKeys: tmpTxn.PublicKeys,
-		EncShares:  tmpTxn.EncShares,
-		EncProofs:  tmpTxn.EncProofs,
-		HashEnc:    tmpTxn.HashEnc,
-	}
-	return wtd, nil
-}
-
-func CreateReadTransaction(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID, privKey abstract.Scalar) (sb *skipchain.SkipBlock, err error) {
-
-	cl := ocs.NewClient()
-	defer cl.Close()
-	sb, cerr := cl.ReadTransactionRequest(scurl, dataID, privKey)
+	sb, cerr := cl.ReadTxnRequest(scurl, dataID, privKey)
 	return sb, cerr
 }
 
-func CreateWriteTransaction(scurl *ocs.SkipChainURL, dp *DataPVSS, hashEnc []byte, pubKey abstract.Point) (sb *skipchain.SkipBlock, err error) {
+func VerifyTxnSignature(writeTxnData *util.WriteTxnData, sig *crypto.SchnorrSig, wrPubKey abstract.Point) error {
+
+	// network.RegisterMessage(&util.WriteTxnData{})
+	wtd, err := network.Marshal(writeTxnData)
+	if err != nil {
+		log.Errorf("Marshal failed: %v", err)
+		return err
+	}
+	tmpHash := sha256.Sum256(wtd)
+	wtdHash := tmpHash[:]
+	return crypto.VerifySchnorr(network.Suite, wrPubKey, wtdHash, *sig)
+}
+
+func GetWriteTxnSB(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) (sbWrite *skipchain.SkipBlock, writeTxnData *util.WriteTxnData, sig *crypto.SchnorrSig, err error) {
+
+	cl := ocs.NewClient()
+	defer cl.Close()
+	sbWrite, tmpTxn, err := cl.GetWriteTxn(scurl, dataID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	sig = tmpTxn.Signature
+	writeTxnData = &util.WriteTxnData{
+		G:          tmpTxn.Data.G,
+		H:          tmpTxn.Data.H,
+		PublicKeys: tmpTxn.Data.PublicKeys,
+		EncShares:  tmpTxn.Data.EncShares,
+		EncProofs:  tmpTxn.Data.EncProofs,
+		HashEnc:    tmpTxn.Data.HashEnc,
+		ReaderPk:   tmpTxn.Data.ReaderPk,
+	}
+	return sbWrite, writeTxnData, sig, nil
+}
+
+func CreateWriteTxn(scurl *ocs.SkipChainURL, dp *util.DataPVSS, hashEnc []byte, pubKey abstract.Point, wrPrivKey abstract.Scalar) (sb *skipchain.SkipBlock, err error) {
 
 	cl := ocs.NewClient()
 	defer cl.Close()
 	readList := make([]abstract.Point, 1)
-	readList = append(readList, pubKey)
-	sb, err = cl.WriteTxnRequest(scurl, dp.G, dp.H, dp.PublicKeys, dp.EncShares, dp.EncProofs, hashEnc, readList)
+	readList[0] = pubKey
+	sb, err = cl.WriteTxnRequest(scurl, dp.G, dp.H, dp.PublicKeys, dp.EncShares, dp.EncProofs, hashEnc, readList, wrPrivKey)
 	return sb, err
 }
 
@@ -176,14 +198,14 @@ func CreateSkipchain(el *onet.Roster) (scurl *ocs.SkipChainURL, err error) {
 	return scurl, err
 }
 
-func VerifyEncMesg(wtd *WriteTransactionData, encMesg []byte) int {
+func VerifyEncMesg(wtd *util.WriteTxnData, encMesg []byte) int {
 
 	tmpHash := sha256.Sum256(encMesg)
 	cmptHash := tmpHash[:]
 	return bytes.Compare(cmptHash, wtd.HashEnc)
 }
 
-func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *WriteTransactionData, dp *DataPVSS) (mesg string) {
+func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *util.WriteTxnData, dp *util.DataPVSS) (mesg string) {
 
 	g_s, _ := recSecret.MarshalBinary()
 	tempSymKey := sha256.Sum256(g_s)
@@ -194,7 +216,7 @@ func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *WriteTransact
 	return mesg
 }
 
-func EncryptMessage(dp *DataPVSS, msg *string) (encMesg []byte, hashEnc []byte) {
+func EncryptMessage(dp *util.DataPVSS, msg *string) (encMesg []byte, hashEnc []byte) {
 
 	mesg := []byte(*msg)
 	g_s, _ := dp.Suite.Point().Mul(nil, dp.Secret).MarshalBinary()
@@ -207,7 +229,7 @@ func EncryptMessage(dp *DataPVSS, msg *string) (encMesg []byte, hashEnc []byte) 
 	return encMesg, hashEnc
 }
 
-func SetupPVSS(pubKeys []abstract.Point, numTrustee int) (dp *DataPVSS, err error) {
+func SetupPVSS(pubKeys []abstract.Point, numTrustee int) (dp *util.DataPVSS, err error) {
 
 	suite := ed25519.NewAES128SHA256Ed25519(false)
 	g := suite.Point().Base()
@@ -223,7 +245,7 @@ func SetupPVSS(pubKeys []abstract.Point, numTrustee int) (dp *DataPVSS, err erro
 		for i := 0; i < numTrustee; i++ {
 			encProofs[i] = commitPoly.Eval(encShares[i].S.I).V
 		}
-		dp = &DataPVSS{
+		dp = &util.DataPVSS{
 			NumTrustee: numTrustee,
 			Threshold:  threshold,
 			Suite:      suite,
@@ -240,9 +262,6 @@ func SetupPVSS(pubKeys []abstract.Point, numTrustee int) (dp *DataPVSS, err erro
 	}
 }
 
-// This function can replace the service for polling
-// the servers to collect their public keys.
-//
 func GetPubKeys(fname *string) ([]abstract.Point, error) {
 
 	var keys []abstract.Point
@@ -260,19 +279,3 @@ func GetPubKeys(fname *string) ([]abstract.Point, error) {
 
 	return keys, nil
 }
-
-// func GetPubKeys(el *onet.Roster) []abstract.Point {
-//
-// 	cl := keypoll.NewClient()
-// 	keys, err := cl.Keypoll(el)
-// 	log.ErrFatal(err)
-//
-// 	size := len(keys)
-// 	for i := 0; i < size/2; i++ {
-// 		tmp := keys[size-i-1]
-// 		keys[size-i-1] = keys[i]
-// 		keys[i] = tmp
-// 	}
-// 	cl.Close()
-// 	return keys
-// }

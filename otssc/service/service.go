@@ -1,11 +1,10 @@
 package service
 
 import (
-	"github.com/dedis/cothority/skipchain"
+	"github.com/dedis/cothority_template/ots/util"
 	"github.com/dedis/cothority_template/otssc/protocol"
-	"gopkg.in/dedis/crypto.v0/abstract"
-	"gopkg.in/dedis/crypto.v0/share/pvss"
 	"gopkg.in/dedis/onet.v1"
+	"gopkg.in/dedis/onet.v1/crypto"
 	"gopkg.in/dedis/onet.v1/log"
 	"gopkg.in/dedis/onet.v1/network"
 )
@@ -17,20 +16,29 @@ type OTSSCService struct {
 }
 
 type OTSDecryptReq struct {
-	Roster       *onet.Roster
-	RootIndex    int
-	H            abstract.Point
-	SCPublicKeys []abstract.Point
-	EncShares    []*pvss.PubVerShare
-	EncProofs    []abstract.Point
-	FwdLink      *skipchain.BlockLink
-	ReadBlkHdr   *skipchain.SkipBlockFix
-	WriteHash    skipchain.SkipBlockID
-	ReadHash     skipchain.SkipBlockID
+	RootIndex int
+	Roster    *onet.Roster
+	Data      *util.OTSDecryptReqData
+	Signature *crypto.SchnorrSig
 }
 
+// type OTSDecryptReq struct {
+// 	Roster       *onet.Roster
+// 	H            abstract.Point
+// 	ACPublicKeys []abstract.Point
+// 	EncShares    []*pvss.PubVerShare
+// 	EncProofs    []abstract.Point
+// 	FwdLink      *skipchain.BlockLink
+// 	ReadBlkHdr   *skipchain.SkipBlockFix
+// 	WriteHash    skipchain.SkipBlockID
+// 	ReadHash     skipchain.SkipBlockID
+// 	Signature    *crypto.SchnorrSig
+// }
+
 type OTSDecryptResp struct {
-	DecShares []*pvss.PubVerShare
+	DecShares []*util.ReencryptedShare
+	// DecShares []protocol.ReencReply
+	// DecShares []*pvss.PubVerShare
 }
 
 const (
@@ -43,6 +51,8 @@ func init() {
 	onet.RegisterNewService(ServiceName, newOTSSCService)
 	network.RegisterMessage(&OTSDecryptReq{})
 	network.RegisterMessage(&OTSDecryptResp{})
+	// network.RegisterMessage(&util.OTSDecryptReqData{})
+	// network.RegisterMessage(&util.ReencryptedShare{})
 }
 
 func (s *OTSSCService) OTSDecryptReq(req *OTSDecryptReq) (*OTSDecryptResp, onet.ClientError) {
@@ -60,15 +70,19 @@ func (s *OTSSCService) OTSDecryptReq(req *OTSDecryptReq) (*OTSDecryptResp, onet.
 	}
 
 	otsDec := pi.(*protocol.OTSDecrypt)
+	otsDec.DecReqData = req.Data
+	otsDec.Signature = req.Signature
 	otsDec.RootIndex = req.RootIndex
-	otsDec.H = req.H
-	otsDec.SCPublicKeys = req.SCPublicKeys
-	otsDec.EncShares = req.EncShares
-	otsDec.EncProofs = req.EncProofs
-	otsDec.FwdLink = req.FwdLink
-	otsDec.ReadHash = req.ReadHash
-	otsDec.WriteHash = req.WriteHash
-	otsDec.ReadBlkHdr = req.ReadBlkHdr
+	// otsDec.RootIndex = req.RootIndex
+	// otsDec.H = req.H
+	// otsDec.ACPublicKeys = req.ACPublicKeys
+	// otsDec.EncShares = req.EncShares
+	// otsDec.EncProofs = req.EncProofs
+	// otsDec.FwdLink = req.FwdLink
+	// otsDec.ReadHash = req.ReadHash
+	// otsDec.WriteHash = req.WriteHash
+	// otsDec.ReadBlkHdr = req.ReadBlkHdr
+	// otsDec.Signature = req.Signature
 
 	err = pi.Start()
 

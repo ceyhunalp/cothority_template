@@ -1,13 +1,23 @@
 package util
 
 import (
+	"crypto/sha256"
 	"errors"
 	"os"
 
+	"gopkg.in/dedis/crypto.v0/abstract"
 	onet "gopkg.in/dedis/onet.v1"
 	"gopkg.in/dedis/onet.v1/app"
+	"gopkg.in/dedis/onet.v1/crypto"
 	"gopkg.in/dedis/onet.v1/log"
+	"gopkg.in/dedis/onet.v1/network"
 )
+
+func SignMessage(msg []byte, privKey abstract.Scalar) (crypto.SchnorrSig, error) {
+	tmpHash := sha256.Sum256(msg)
+	msgHash := tmpHash[:]
+	return crypto.SignSchnorr(network.Suite, privKey, msgHash)
+}
 
 func GetGroup(tomlFileName string) *app.Group {
 	gr, err := os.Open(tomlFileName)
