@@ -9,26 +9,25 @@ import (
 )
 
 type DataPVSS struct {
-	NumTrustee int
-	Threshold  int
-	Suite      abstract.Suite
-	G          abstract.Point
-	H          abstract.Point
-	Secret     abstract.Scalar
-	PublicKeys []abstract.Point
-	EncShares  []*pvss.PubVerShare
-	EncProofs  []abstract.Point
-	// CommitPoly *share.PubPoly
+	NumTrustee   int
+	Threshold    int
+	Suite        abstract.Suite
+	G            abstract.Point
+	H            abstract.Point
+	Secret       abstract.Scalar
+	SCPublicKeys []abstract.Point
+	EncShares    []*pvss.PubVerShare
+	EncProofs    []abstract.Point
 }
 
 type WriteTxnData struct {
-	G          abstract.Point
-	H          abstract.Point
-	PublicKeys []abstract.Point
-	EncShares  []*pvss.PubVerShare
-	EncProofs  []abstract.Point
-	HashEnc    []byte
-	ReaderPk   abstract.Point
+	G            abstract.Point
+	H            abstract.Point
+	SCPublicKeys []abstract.Point
+	EncShares    []*pvss.PubVerShare
+	EncProofs    []abstract.Point
+	HashEnc      []byte
+	ReaderPk     abstract.Point
 }
 
 type OTSDecryptReqData struct {
@@ -38,7 +37,7 @@ type OTSDecryptReqData struct {
 	ACPublicKeys []abstract.Point
 }
 
-type ReencryptedShare struct {
+type DecryptedShare struct {
 	Index int
 	Data  []byte
 }

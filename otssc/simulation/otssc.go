@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -15,26 +16,21 @@ import (
 	"gopkg.in/dedis/crypto.v0/random"
 	"gopkg.in/dedis/crypto.v0/share/pvss"
 	"gopkg.in/dedis/onet.v1"
-	"gopkg.in/dedis/onet.v1/crypto"
 	"gopkg.in/dedis/onet.v1/log"
 	"gopkg.in/dedis/onet.v1/network"
 	"gopkg.in/dedis/onet.v1/simul/monitor"
 )
 
 type ProtocolData struct {
-	PVSSData     *util.DataPVSS
-	Roster       *onet.Roster
-	WriteTxnData *util.WriteTxnData
-	EncMesg      []byte
-	EncShares    []*pvss.PubVerShare
-	EncProofs    []abstract.Point
-	FwdLink      *skipchain.BlockLink
-	ACPublicKeys []abstract.Point
-	WriteHash    skipchain.SkipBlockID
-	ReadHash     skipchain.SkipBlockID
-	ReadBlkHdr   *skipchain.SkipBlockFix
-	Signature    *crypto.SchnorrSig
-	// RootIndex    int
+	PVSSData      *util.DataPVSS
+	EncMesg       []byte
+	WriteTxnSB    *skipchain.SkipBlock
+	WriteTxnData  *util.WriteTxnData
+	ReadTxnSBF    *skipchain.SkipBlockFix
+	ACPublicKeys  []abstract.Point
+	ReaderPrivKey abstract.Scalar
+	// WriterPrivKey abstract.Scalar
+	ReadSBIndex int
 }
 
 func init() {
@@ -78,10 +74,10 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 	acSize := 10
 	acRoster := onet.NewRoster(config.Roster.List[:acSize])
 	// acPubKeys := acRoster.Publics()
-	pubKeys := config.Roster.Publics()
+	scPubKeys := config.Roster.Publics()
+	// pubKeys := config.Roster.Publics()
 
 	scurl, err := ots.CreateSkipchain(acRoster)
-	// scurl, err := ots.CreateSkipchain(config.Roster)
 
 	if err != nil {
 		log.Errorf("Could not create skipchain: %v", err)
@@ -89,11 +85,11 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 	}
 
 	fmt.Println("Tree size is", config.Tree.Size())
-	fmt.Println("PubKey size is", len(pubKeys))
+	fmt.Println("PubKey size is", len(scPubKeys))
 
 	for round := 0; round < otss.Rounds; round++ {
 		log.Info("Round:", round)
-		protoData := initialPVSSSteps(scurl, pubKeys, config.Tree.Size())
+		protoData := initialPVSSSteps(scurl, scPubKeys, config.Tree.Size())
 		round := monitor.NewTimeMeasure("round")
 		p, err := config.Overlay.CreateProtocol("otssc", config.Tree, onet.NilServiceID)
 
@@ -101,23 +97,51 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			return err
 		}
 
+		// GetDecryptedShares call preparation
+		// index := readSB.Index
+		// idx := index - updWriteSB.Index - 1
+
+		idx := protoData.ReadSBIndex - protoData.WriteTxnSB.Index - 1
+		if idx < 0 {
+			return errors.New("Forward-link index is negative")
+		}
+		merkleProof := protoData.WriteTxnSB.GetForward(idx)
+
+		if merkleProof == nil {
+			return errors.New("Forward-link does not exist")
+		}
+
+		data := &util.OTSDecryptReqData{
+			WriteTxnSBF:  protoData.WriteTxnSB.SkipBlockFix,
+			ReadTxnSBF:   protoData.ReadTxnSBF,
+			MerkleProof:  merkleProof,
+			ACPublicKeys: protoData.ACPublicKeys,
+		}
+
 		proto := p.(*protocol.OTSDecrypt)
-		proto.H = protoData.PVSSData.H
-		proto.EncShares = protoData.EncShares
-		proto.EncProofs = protoData.EncProofs
-		// proto.RootIndex = protoData.RootIndex
-		proto.FwdLink = protoData.FwdLink
-		proto.ACPublicKeys = protoData.ACPublicKeys
-		proto.ReadHash = protoData.ReadHash
-		proto.WriteHash = protoData.WriteHash
-		proto.ReadBlkHdr = protoData.ReadBlkHdr
-		proto.Signature = protoData.Signature
+		proto.DecReqData = data
+		proto.RootIndex = 0
+
+		msg, err := network.Marshal(data)
+		if err != nil {
+			return err
+		}
+		sig, err := util.SignMessage(msg, protoData.ReaderPrivKey)
+		if err != nil {
+			return err
+		}
+
+		proto.Signature = &sig
 
 		go p.Start()
-		tmpReencShares := <-proto.DecShares
-		// tmpDecShares := <-proto.DecShares
+		reencShares := <-proto.DecShares
 
-		log.Lvl3("Finished round", round)
+		fmt.Println("Round:", round.CPU.Value, round.User.Value)
+
+		tmpDecShares, err := ots.DHDecrypt(reencShares, scPubKeys, protoData.ReaderPrivKey)
+		if err != nil {
+			return err
+		}
 
 		size := len(tmpDecShares)
 		decShares := make([]*pvss.PubVerShare, size)
@@ -130,20 +154,17 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		var validEncShares []*pvss.PubVerShare
 		var validDecShares []*pvss.PubVerShare
 
-		sz := len(decShares)
-		for i := 0; i < sz; i++ {
-			if decShares != nil {
-				validKeys = append(validKeys, protoData.WriteTxnData.PublicKeys[i])
-				validEncShares = append(validEncShares, protoData.WriteTxnData.EncShares[i])
-				validDecShares = append(validDecShares, decShares[i])
-			}
+		// sz := len(decShares)
+		for i := 0; i < size; i++ {
+			validKeys = append(validKeys, protoData.WriteTxnData.SCPublicKeys[i])
+			validEncShares = append(validEncShares, protoData.WriteTxnData.EncShares[i])
+			validDecShares = append(validDecShares, decShares[i])
 		}
 
 		recSecret, err := pvss.RecoverSecret(protoData.PVSSData.Suite, protoData.WriteTxnData.G, validKeys, validEncShares, validDecShares, protoData.PVSSData.Threshold, protoData.PVSSData.NumTrustee)
 
 		if err != nil {
-			log.Errorf("Could not recover secret: %v", err)
-			os.Exit(1)
+			return err
 		}
 
 		recvMesg := ots.DecryptMessage(recSecret, protoData.EncMesg, protoData.WriteTxnData, protoData.PVSSData)
@@ -153,69 +174,84 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 	return nil
 }
 
-func initialPVSSSteps(scurl *ocs.SkipChainURL, pubKeys []abstract.Point, numTrustee int) *ProtocolData {
+func initialPVSSSteps(scurl *ocs.SkipChainURL, scPubKeys []abstract.Point, numTrustee int) *ProtocolData {
 
 	startWall := time.Now()
 	cpuTimeSys, cpuTimeUser := GetRTime()
-	dataPVSS, err := ots.SetupPVSS(pubKeys, numTrustee)
+	dataPVSS, err := ots.SetupPVSS(scPubKeys, numTrustee)
 	cpuSysDuration, cpuUserDuration := GetDiffRTime(cpuTimeSys, cpuTimeUser)
 	wallDuration := float64(time.Since(startWall)) / 1.0e9
 
 	fmt.Println("SetupPVSS:", wallDuration, cpuSysDuration, cpuUserDuration)
-	// for index := 0; index < len(pubKeys); index++ {
-	// 	tmp, _ := crypto.PointToStringHex(network.Suite, pubKeys[index])
-	// 	fmt.Println(tmp)
-	// }
 
 	if err != nil {
 		log.Errorf("Could not setup PVSS: %v", err)
 		os.Exit(1)
 	}
+
 	mesg := "Dunyali dostum, tam olarak anlamadin galiba. KACIRILDIN!"
 	log.Info("Plaintext message is:", mesg)
 	encMesg, hashEnc := ots.EncryptMessage(dataPVSS, &mesg)
+	if err != nil {
+		log.Errorf("Could not setup PVSS: %v", err)
+		os.Exit(1)
+	}
+	// Writer's pk/sk pair
+	wrPrivKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
+	wrPubKey := dataPVSS.Suite.Point().Mul(nil, wrPrivKey)
+	// Reader's pk/sk pair
 	privKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	pubKey := dataPVSS.Suite.Point().Mul(nil, privKey)
 
 	startWall = time.Now()
 	cpuTimeSys, cpuTimeUser = GetRTime()
-	sbWrite, err := ots.CreateWriteTxn(scurl, dataPVSS, hashEnc, pubKey)
+	writeSB, err := ots.CreateWriteTxn(scurl, dataPVSS, hashEnc, pubKey, wrPrivKey)
 	cpuSysDuration, cpuUserDuration = GetDiffRTime(cpuTimeSys, cpuTimeUser)
 	wallDuration = float64(time.Since(startWall)) / 1.0e9
-
-	fmt.Println("CreateWriteTxn:", wallDuration, cpuSysDuration, cpuUserDuration)
 
 	if err != nil {
 		log.Errorf("Could not create write transaction: %v", err)
 		os.Exit(1)
 	}
 
+	fmt.Println("CreateWriteTxn:", wallDuration, cpuSysDuration, cpuUserDuration)
+
+	// Bob gets it from Alice
+	writeID := writeSB.Hash
+
 	// Get write transaction from skipchain
 	startWall = time.Now()
 	cpuTimeSys, cpuTimeUser = GetRTime()
 
-	writeTxnData, err := ots.GetWriteTxn(scurl, sbWrite.Hash)
+	writeSB, writeTxnData, sig, err := ots.GetWriteTxnSB(scurl, writeID)
 	if err != nil {
-		log.Errorf("Could not retrieve write transaction: %v", err)
+		log.Errorf("Could not retrieve write transaction block: %v", err)
 		os.Exit(1)
 	}
 
-	_, verifiedEncShares, err := pvss.VerifyEncShareBatch(network.Suite, writeTxnData.H, writeTxnData.PublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
+	sigVerErr := ots.VerifyTxnSignature(writeTxnData, sig, wrPubKey)
 
-	if err != nil {
-		log.Errorf("Could not verify encrypted shares: %v", err)
+	if sigVerErr != nil {
+		log.Errorf("Signature verification failed on the write transaction: %v", sigVerErr)
 		os.Exit(1)
 	}
 
-	if len(verifiedEncShares) != len(writeTxnData.EncShares) {
-		log.Errorf("Invalid encrypted shares in the write transaction")
-		os.Exit(1)
-	}
+	log.Info("Signature verified on the retrieved write transaction")
 
 	validHash := ots.VerifyEncMesg(writeTxnData, encMesg)
 
-	if validHash != 0 {
+	if validHash == 0 {
+		log.Info("Valid hash for encrypted message")
+	} else {
 		log.Errorf("Invalid hash for encrypted message")
+		os.Exit(1)
+	}
+
+	// Verify encrypted shares
+	_, _, err = pvss.VerifyEncShareBatch(network.Suite, writeTxnData.H, writeTxnData.SCPublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
+
+	if err != nil {
+		log.Errorf("Could not verify encrypted shares in the write transaction: %v", err)
 		os.Exit(1)
 	}
 
@@ -224,57 +260,32 @@ func initialPVSSSteps(scurl *ocs.SkipChainURL, pubKeys []abstract.Point, numTrus
 
 	fmt.Println("Verify Write Txn:", wallDuration, cpuSysDuration, cpuUserDuration)
 
-	writeID := sbWrite.Hash
-	sbRead, err := ots.CreateReadTxn(scurl, writeID, privKey)
-
+	readSB, err := ots.CreateReadTxn(scurl, writeID, privKey)
 	if err != nil {
 		log.Errorf("Could not create read transaction: %v", err)
 		os.Exit(1)
 	}
 
-	readID := sbRead.Hash
-
-	updWriteBlk, _ := ots.GetUpdatedBlock(scurl, writeID)
-	// fmt.Println("Forward link is:", updWriteBlk.ForwardLink[0].Hash.Short())
-
-	acPubKeys := sbRead.Roster.Publics()
-
-	// for index := 0; index < len(acPubKeys); index++ {
-	// 	tmp, _ := crypto.PointToStringHex(network.Suite, acPubKeys[index])
-	// 	fmt.Println(tmp)
-	// }
-
-	idx := sbRead.Index - updWriteBlk.Index - 1
-	if idx < 0 {
-		log.Fatal("ForwardLink index is negative")
-		os.Exit(1)
-	}
-	fwdLink := updWriteBlk.GetForward(idx)
-
-	if fwdLink == nil {
-		log.Errorf("Forward does not exist")
-		os.Exit(1)
-	}
-
-	tmp := []byte(readID)
-	sig, err := crypto.SignSchnorr(network.Suite, privKey, tmp)
+	updWriteSB, err := ots.GetUpdatedWriteTxnSB(scurl, writeID)
 	if err != nil {
-		log.Errorf("Failed signature: %v", err)
+		log.Errorf("Could not retrieve updated write txn SB: %v", err)
+		os.Exit(1)
 	}
+
+	acPubKeys := readSB.Roster.Publics()
+	scPubKeys = writeTxnData.SCPublicKeys
+
+	readTxnSBF := readSB.SkipBlockFix
 
 	pd := &ProtocolData{
-		PVSSData:     dataPVSS,
-		EncMesg:      encMesg,
-		WriteTxnData: writeTxnData,
-		EncShares:    writeTxnData.EncShares,
-		EncProofs:    writeTxnData.EncProofs,
-		FwdLink:      fwdLink,
-		ACPublicKeys: acPubKeys,
-		WriteHash:    updWriteBlk.Hash,
-		ReadHash:     readID,
-		ReadBlkHdr:   sbRead.SkipBlockFix,
-		Signature:    &sig,
-		// RootIndex:    0,
+		PVSSData:      dataPVSS,
+		EncMesg:       encMesg,
+		WriteTxnSB:    updWriteSB,
+		WriteTxnData:  writeTxnData,
+		ReadTxnSBF:    readTxnSBF,
+		ACPublicKeys:  acPubKeys,
+		ReaderPrivKey: privKey,
+		ReadSBIndex:   readSB.Index,
 	}
 
 	return pd

@@ -1,6 +1,6 @@
 Simulation = "OTS"
-Servers = 20
-BF = 19
+Servers = 50
+BF = 49
 Rounds = 4
 
 Hosts

@@ -22,23 +22,8 @@ type OTSDecryptReq struct {
 	Signature *crypto.SchnorrSig
 }
 
-// type OTSDecryptReq struct {
-// 	Roster       *onet.Roster
-// 	H            abstract.Point
-// 	ACPublicKeys []abstract.Point
-// 	EncShares    []*pvss.PubVerShare
-// 	EncProofs    []abstract.Point
-// 	FwdLink      *skipchain.BlockLink
-// 	ReadBlkHdr   *skipchain.SkipBlockFix
-// 	WriteHash    skipchain.SkipBlockID
-// 	ReadHash     skipchain.SkipBlockID
-// 	Signature    *crypto.SchnorrSig
-// }
-
 type OTSDecryptResp struct {
-	DecShares []*util.ReencryptedShare
-	// DecShares []protocol.ReencReply
-	// DecShares []*pvss.PubVerShare
+	DecShares []*util.DecryptedShare
 }
 
 const (
@@ -52,7 +37,7 @@ func init() {
 	network.RegisterMessage(&OTSDecryptReq{})
 	network.RegisterMessage(&OTSDecryptResp{})
 	// network.RegisterMessage(&util.OTSDecryptReqData{})
-	// network.RegisterMessage(&util.ReencryptedShare{})
+	// network.RegisterMessage(&util.DecryptedShare{})
 }
 
 func (s *OTSSCService) OTSDecryptReq(req *OTSDecryptReq) (*OTSDecryptResp, onet.ClientError) {
@@ -73,16 +58,6 @@ func (s *OTSSCService) OTSDecryptReq(req *OTSDecryptReq) (*OTSDecryptResp, onet.
 	otsDec.DecReqData = req.Data
 	otsDec.Signature = req.Signature
 	otsDec.RootIndex = req.RootIndex
-	// otsDec.RootIndex = req.RootIndex
-	// otsDec.H = req.H
-	// otsDec.ACPublicKeys = req.ACPublicKeys
-	// otsDec.EncShares = req.EncShares
-	// otsDec.EncProofs = req.EncProofs
-	// otsDec.FwdLink = req.FwdLink
-	// otsDec.ReadHash = req.ReadHash
-	// otsDec.WriteHash = req.WriteHash
-	// otsDec.ReadBlkHdr = req.ReadBlkHdr
-	// otsDec.Signature = req.Signature
 
 	err = pi.Start()
 

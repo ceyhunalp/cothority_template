@@ -90,7 +90,7 @@ func main() {
 	sigVerErr := ots.VerifyTxnSignature(writeTxnData, sig, wrPubKey)
 
 	if sigVerErr != nil {
-		log.Error("Signature verification failed on the write transaction")
+		log.Errorf("Signature verification failed on the write transaction: %v", sigVerErr)
 		os.Exit(1)
 	}
 
@@ -106,17 +106,12 @@ func main() {
 	}
 
 	// Verify encrypted shares
-	_, _, err = pvss.VerifyEncShareBatch(network.Suite, writeTxnData.H, writeTxnData.PublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
+	_, _, err = pvss.VerifyEncShareBatch(network.Suite, writeTxnData.H, writeTxnData.SCPublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
 
 	if err != nil {
 		log.Errorf("Could not verify encrypted shares in the write transaction: %v", err)
 		os.Exit(1)
 	}
-
-	// if len(verifiedEncShares) != len(writeTxnData.EncShares) {
-	// 	log.Errorf("Invalid encrypted shares in the write transaction")
-	// 	os.Exit(1)
-	// }
 
 	// diffSk := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	// diffPk := dataPVSS.Suite.Point().Mul(nil, diffSk)
@@ -132,23 +127,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	// writeID is the hash of the write txn block
-	// readID is the hash of the read txn block
-	// log.Info("In client read txn:", readSB.Hash)
+	updWriteSB, err := ots.GetUpdatedWriteTxnSB(scurl, writeID)
+	if err != nil {
+		log.Errorf("Could not retrieve updated write txn SB: %v", err)
+		os.Exit(1)
+	}
 
-	updWriteSB, _ := ots.GetUpdatedWriteTxnSB(scurl, writeID)
 	acPubKeys := readSB.Roster.Publics()
-	scPubKeys := writeTxnData.PublicKeys
+	scPubKeys := writeTxnData.SCPublicKeys
 	// ots.TestSkipchain(scurl, dataPVSS)
 	// diffSk := dataPVSS.Suite.Scalar().Pick(random.Stream)
 
-	decShares, err := ots.GetDecryptShares(scurl, el, updWriteSB, readSB.SkipBlockFix, acPubKeys, scPubKeys, privKey, readSB.Index)
-
-	// decShares, err := ots.GetDecryptShares(scurl, el, h, acPubKeys, encShares, encProofs, writeBlk, index, readBlkHdr, writeHash, readHash, scPubKeys, privKey)
-	// decShares, err := ots.GetDecryptShares(scurl, el, writeTxnData.H, acPubKeys, writeTxnData.EncShares, writeTxnData.EncProofs, updWriteBlk, sbRead.Index, sbRead.SkipBlockFix, updWriteBlk.Hash, readID, writeTxnData.PublicKeys, privKey)
+	decShares, err := ots.GetDecryptedShares(scurl, el, updWriteSB, readSB.SkipBlockFix, acPubKeys, scPubKeys, privKey, readSB.Index)
 
 	if err != nil {
-		log.Errorf("Could not decrypt shares: %v", err)
+		log.Errorf("Could not get the decrypted shares: %v", err)
 		os.Exit(1)
 	}
 
@@ -158,13 +151,12 @@ func main() {
 
 	sz := len(decShares)
 	for i := 0; i < sz; i++ {
-		validKeys = append(validKeys, writeTxnData.PublicKeys[i])
+		validKeys = append(validKeys, writeTxnData.SCPublicKeys[i])
 		validEncShares = append(validEncShares, writeTxnData.EncShares[i])
 		validDecShares = append(validDecShares, decShares[i])
 	}
 
 	recSecret, err := pvss.RecoverSecret(network.Suite, writeTxnData.G, validKeys, validEncShares, validDecShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
-	// recSecret, err := pvss.RecoverSecret(dataPVSS.Suite, dataPVSS.G, dataPVSS.PublicKeys, dataPVSS.EncShares, decShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
 
 	if err != nil {
 		log.Errorf("Could not recover secret: %v", err)
@@ -173,8 +165,4 @@ func main() {
 
 	recMesg := ots.DecryptMessage(recSecret, encMesg, writeTxnData, dataPVSS)
 	log.Info("Recovered message is:", recMesg)
-
-	// _, msg, _ := network.Unmarshal(sbRead.Data)
-	// abbas := msg.(*ocs.DataOCS)
-	// fmt.Println(abbas.Read.DataID)
 }

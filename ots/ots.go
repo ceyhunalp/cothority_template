@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"os"
 
 	"github.com/dedis/cothority/skipchain"
@@ -46,7 +47,6 @@ func TestSkipchain(scurl *ocs.SkipChainURL, dp *util.DataPVSS) {
 		tmp, _ := CreateReadTxn(scurl, sbWrite[i].Hash, readerSK[i])
 		sbRead[i] = tmp
 	}
-
 	// for i := 0; i < count; i++ {
 	// 	fmt.Println("hash is", sbWrite[i].Data)
 	// 	fmt.Println("fwd len is", sbWrite[i].GetForwardLen())
@@ -55,33 +55,66 @@ func TestSkipchain(scurl *ocs.SkipChainURL, dp *util.DataPVSS) {
 	// 	fmt.Println("index is", sbWrite[i].Index)
 	// 	fmt.Println("=====================================")
 	// }
-
 }
 
-func GetDecryptShares(scurl *ocs.SkipChainURL, el *onet.Roster, writeTxnSB *skipchain.SkipBlock, readTxnSBF *skipchain.SkipBlockFix, acPubKeys []abstract.Point, scPubKeys []abstract.Point, privKey abstract.Scalar, index int) ([]*pvss.PubVerShare, error) {
+func DHDecrypt(shares []*util.DecryptedShare, scPubKeys []abstract.Point, privKey abstract.Scalar) ([]*pvss.PubVerShare, error) {
+
+	// network.RegisterMessage(&pvss.PubVerShare{})
+	size := len(shares)
+	decShares := make([]*pvss.PubVerShare, size)
+
+	for i := 0; i < size; i++ {
+		tmp := shares[i]
+		shSec, err := network.Suite.Point().Mul(scPubKeys[tmp.Index], privKey).MarshalBinary()
+		if err != nil {
+			// log.Errorf("MarshalBinary failed: %v", err)
+			return nil, err
+		}
+		tempSymKey := sha256.Sum256(shSec)
+		symKey := tempSymKey[:]
+		cipher := network.Suite.Cipher(symKey)
+		decMesg, err := cipher.Open(nil, tmp.Data)
+		if err != nil {
+			// log.Errorf("Decryption failed: %v", err)
+			return nil, err
+		}
+		_, tmpSh, err := network.Unmarshal(decMesg)
+		if err != nil {
+			// log.Errorf("Failed unmarshaling: %v", err)
+			return nil, err
+		}
+		sh := tmpSh.(*pvss.PubVerShare)
+		decShares[i] = sh
+	}
+	return decShares, nil
+}
+
+func GetDecryptedShares(scurl *ocs.SkipChainURL, el *onet.Roster, writeTxnSB *skipchain.SkipBlock, readTxnSBF *skipchain.SkipBlockFix, acPubKeys []abstract.Point, scPubKeys []abstract.Point, privKey abstract.Scalar, index int) ([]*pvss.PubVerShare, error) {
 
 	cl := otssc.NewClient()
 	defer cl.Close()
 
 	idx := index - writeTxnSB.Index - 1
 	if idx < 0 {
-		log.Fatal("ForwardLink index is negative")
-		os.Exit(1)
+		return nil, errors.New("Forward-link index is negative")
 	}
 	merkleProof := writeTxnSB.GetForward(idx)
 
 	if merkleProof == nil {
-		log.Errorf("Forward does not exist")
-		os.Exit(1)
+		return nil, errors.New("Forward-link does not exist")
 	}
 
-	tmpReencShares, err := cl.OTSDecrypt(el, writeTxnSB.SkipBlockFix, readTxnSBF, merkleProof, acPubKeys, privKey)
+	reencShares, cerr := cl.OTSDecrypt(el, writeTxnSB.SkipBlockFix, readTxnSBF, merkleProof, acPubKeys, privKey)
+
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	tmpDecShares, err := DHDecrypt(reencShares, scPubKeys, privKey)
 
 	if err != nil {
 		return nil, err
 	}
-
-	tmpDecShares := dhDecrypt(tmpReencShares, scPubKeys, privKey)
 
 	size := len(tmpDecShares)
 	decShares := make([]*pvss.PubVerShare, size)
@@ -91,39 +124,6 @@ func GetDecryptShares(scurl *ocs.SkipChainURL, el *onet.Roster, writeTxnSB *skip
 	}
 
 	return decShares, nil
-}
-
-func dhDecrypt(shares []*util.ReencryptedShare, scPubKeys []abstract.Point, privKey abstract.Scalar) []*pvss.PubVerShare {
-
-	// network.RegisterMessage(&pvss.PubVerShare{})
-	size := len(shares)
-	decShares := make([]*pvss.PubVerShare, size)
-
-	for i := 0; i < size; i++ {
-		tmp := shares[i]
-		shSec, err := network.Suite.Point().Mul(scPubKeys[tmp.Index], privKey).MarshalBinary()
-		log.Info("Shared secret in dhDecrypt:", shSec)
-		if err != nil {
-			log.Errorf("MarshalBinary failed: %v", err)
-			return nil
-		}
-		tempSymKey := sha256.Sum256(shSec)
-		symKey := tempSymKey[:]
-		cipher := network.Suite.Cipher(symKey)
-		decMesg, err := cipher.Open(nil, tmp.Data)
-		if err != nil {
-			log.Errorf("Decryption failed: %v", err)
-			return nil
-		}
-		_, tmpSh, err := network.Unmarshal(decMesg)
-		if err != nil {
-			log.Errorf("Failed unmarshaling: %v", err)
-			return nil
-		}
-		sh := tmpSh.(*pvss.PubVerShare)
-		decShares[i] = sh
-	}
-	return decShares
 }
 
 func GetUpdatedWriteTxnSB(scurl *ocs.SkipChainURL, sbid skipchain.SkipBlockID) (*skipchain.SkipBlock, error) {
@@ -150,7 +150,7 @@ func VerifyTxnSignature(writeTxnData *util.WriteTxnData, sig *crypto.SchnorrSig,
 	// network.RegisterMessage(&util.WriteTxnData{})
 	wtd, err := network.Marshal(writeTxnData)
 	if err != nil {
-		log.Errorf("Marshal failed: %v", err)
+		// log.Errorf("Marshal failed: %v", err)
 		return err
 	}
 	tmpHash := sha256.Sum256(wtd)
@@ -169,13 +169,13 @@ func GetWriteTxnSB(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) (sbWri
 
 	sig = tmpTxn.Signature
 	writeTxnData = &util.WriteTxnData{
-		G:          tmpTxn.Data.G,
-		H:          tmpTxn.Data.H,
-		PublicKeys: tmpTxn.Data.PublicKeys,
-		EncShares:  tmpTxn.Data.EncShares,
-		EncProofs:  tmpTxn.Data.EncProofs,
-		HashEnc:    tmpTxn.Data.HashEnc,
-		ReaderPk:   tmpTxn.Data.ReaderPk,
+		G:            tmpTxn.Data.G,
+		H:            tmpTxn.Data.H,
+		SCPublicKeys: tmpTxn.Data.SCPublicKeys,
+		EncShares:    tmpTxn.Data.EncShares,
+		EncProofs:    tmpTxn.Data.EncProofs,
+		HashEnc:      tmpTxn.Data.HashEnc,
+		ReaderPk:     tmpTxn.Data.ReaderPk,
 	}
 	return sbWrite, writeTxnData, sig, nil
 }
@@ -186,7 +186,7 @@ func CreateWriteTxn(scurl *ocs.SkipChainURL, dp *util.DataPVSS, hashEnc []byte, 
 	defer cl.Close()
 	readList := make([]abstract.Point, 1)
 	readList[0] = pubKey
-	sb, err = cl.WriteTxnRequest(scurl, dp.G, dp.H, dp.PublicKeys, dp.EncShares, dp.EncProofs, hashEnc, readList, wrPrivKey)
+	sb, err = cl.WriteTxnRequest(scurl, dp.G, dp.H, dp.SCPublicKeys, dp.EncShares, dp.EncProofs, hashEnc, readList, wrPrivKey)
 	return sb, err
 }
 
@@ -229,7 +229,7 @@ func EncryptMessage(dp *util.DataPVSS, msg *string) (encMesg []byte, hashEnc []b
 	return encMesg, hashEnc
 }
 
-func SetupPVSS(pubKeys []abstract.Point, numTrustee int) (dp *util.DataPVSS, err error) {
+func SetupPVSS(scPubKeys []abstract.Point, numTrustee int) (dp *util.DataPVSS, err error) {
 
 	suite := ed25519.NewAES128SHA256Ed25519(false)
 	g := suite.Point().Base()
@@ -238,7 +238,7 @@ func SetupPVSS(pubKeys []abstract.Point, numTrustee int) (dp *util.DataPVSS, err
 	threshold := 2*numTrustee/3 + 1
 
 	// PVSS step
-	encShares, commitPoly, err := pvss.EncShares(suite, h, pubKeys, secret, threshold)
+	encShares, commitPoly, err := pvss.EncShares(suite, h, scPubKeys, secret, threshold)
 
 	if err == nil {
 		encProofs := make([]abstract.Point, numTrustee)
@@ -246,15 +246,15 @@ func SetupPVSS(pubKeys []abstract.Point, numTrustee int) (dp *util.DataPVSS, err
 			encProofs[i] = commitPoly.Eval(encShares[i].S.I).V
 		}
 		dp = &util.DataPVSS{
-			NumTrustee: numTrustee,
-			Threshold:  threshold,
-			Suite:      suite,
-			G:          g,
-			H:          h,
-			Secret:     secret,
-			PublicKeys: pubKeys,
-			EncShares:  encShares,
-			EncProofs:  encProofs,
+			NumTrustee:   numTrustee,
+			Threshold:    threshold,
+			Suite:        suite,
+			G:            g,
+			H:            h,
+			Secret:       secret,
+			SCPublicKeys: scPubKeys,
+			EncShares:    encShares,
+			EncProofs:    encProofs,
 		}
 		return dp, nil
 	} else {
