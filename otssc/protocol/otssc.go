@@ -43,11 +43,15 @@ func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
 		TreeNodeInstance: n,
 		DecShares:        make(chan []*util.DecryptedShare),
 	}
+	// err := otsDecrypt.RegisterChannelLength(&otsDecrypt.ChannelAnnounce, 2000)
 	err := otsDecrypt.RegisterChannel(&otsDecrypt.ChannelAnnounce)
+
 	if err != nil {
 		return nil, errors.New("couldn't register announcement-channel: " + err.Error())
 	}
+	// err = otsDecrypt.RegisterChannelLength(&otsDecrypt.ChannelReply, 2000)
 	err = otsDecrypt.RegisterChannel(&otsDecrypt.ChannelReply)
+
 	if err != nil {
 		return nil, errors.New("couldn't register reply-channel: " + err.Error())
 	}
@@ -85,17 +89,34 @@ func (p *OTSDecrypt) Dispatch() error {
 			idx--
 		}
 
-		tempSh, err := pvss.DecShare(network.Suite, writeTxnData.H, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
+		// binKey, err := writeTxnData.ReaderPk.MarshalBinary()
+		// if err != nil {
+		// 	return err
+		// }
+		// tmpHash := sha256.Sum256(binKey)
+		// labelHash := tmpHash[:]
+		// h, _ := network.Suite.Point().Pick(nil, network.Suite.Cipher(labelHash))
 
+		h, err := util.CreatePointH(network.Suite, writeTxnData.ReaderPk)
 		if err != nil {
-			log.Error(p.Info(), "Failed to decrypt share", p.Parent().Name(), err)
+			log.Error(p.Info(), "Failed to generate point h", p.Name(), err)
 			return err
 		}
 
-		reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
 		ds := &util.DecryptedShare{
 			Index: p.Index(),
-			Data:  reencSh,
+		}
+
+		tempSh, err := pvss.DecShare(network.Suite, h, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
+
+		// tempSh, err := pvss.DecShare(network.Suite, writeTxnData.H, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
+
+		if err != nil {
+			log.Error(p.Info(), "Failed to decrypt share", p.Name(), err)
+			ds.Data = []byte{}
+		} else {
+			reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
+			ds.Data = reencSh
 		}
 
 		err = p.SendTo(p.Parent(), &DecryptReply{ds})
@@ -119,17 +140,33 @@ func (p *OTSDecrypt) Dispatch() error {
 		return sigErr
 	}
 
-	tempSh, err := pvss.DecShare(network.Suite, writeTxnData.H, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
-
+	h, err := util.CreatePointH(network.Suite, writeTxnData.ReaderPk)
 	if err != nil {
-		log.Error(p.Info(), "Failed to decrypt share", p.Parent().Name(), err)
+		log.Error(p.Info(), "Failed to generate point h", p.Name(), err)
 		return err
 	}
+	// binKey, err := writeTxnData.ReaderPk.MarshalBinary()
+	// if err != nil {
+	// 	return err
+	// }
+	// tmpHash := sha256.Sum256(binKey)
+	// labelHash := tmpHash[:]
+	// h, _ := network.Suite.Point().Pick(nil, network.Suite.Cipher(labelHash))
 
-	reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
 	ds := &util.DecryptedShare{
 		Index: p.Index(),
-		Data:  reencSh,
+	}
+
+	tempSh, err := pvss.DecShare(network.Suite, h, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
+
+	// tempSh, err := pvss.DecShare(network.Suite, writeTxnData.H, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
+
+	if err != nil {
+		log.Error(p.Info(), "Failed to decrypt share", p.Name(), err)
+		ds.Data = []byte{}
+	} else {
+		reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
+		ds.Data = reencSh
 	}
 
 	decShares = append(decShares, ds)
@@ -190,10 +227,9 @@ func verifyDecryptionRequest(decReqData *util.OTSDecryptReqData, sig *crypto.Sch
 		return nil, sigErr
 	}
 
-	// 2) Check Merkle proof
-
+	// 2) Check inclusion proof
 	readSBHash := decReqData.ReadTxnSBF.CalculateHash()
-	proof := decReqData.MerkleProof
+	proof := decReqData.InclusionProof
 
 	if len(proof.Signature) == 0 {
 		return nil, errors.New("No signature present" + log.Stack())

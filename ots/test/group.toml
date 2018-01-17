@@ -26,3 +26,15 @@
   Address = "tcp://127.0.0.1:7014"
   Public = "UamV+VyosOpc5K/Rb9o72NZ1zEwM3t+B/k4oQskdh64="
   Description = "Conode_7"
+[[servers]]
+  Address = "tcp://127.0.0.1:7016"
+  Public = "+13fPKG381WBPR6vYOIMDkWkhTPcsOmDEuRJwYsvDmQ="
+  Description = "Conode_8"
+[[servers]]
+  Address = "tcp://127.0.0.1:7018"
+  Public = "4vcOge5i81FxnSqWKPene2B2/pNIvF3uDGxabHPBRZ8="
+  Description = "Conode_9"
+[[servers]]
+  Address = "tcp://127.0.0.1:7020"
+  Public = "Dnd2KJTiY58l3ZBl8A54D1GX2sTJpP6eSC9HB3oE/mE="
+  Description = "Conode_10"

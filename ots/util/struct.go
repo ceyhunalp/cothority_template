@@ -21,8 +21,8 @@ type DataPVSS struct {
 }
 
 type WriteTxnData struct {
-	G            abstract.Point
-	H            abstract.Point
+	G abstract.Point
+	// H            abstract.Point
 	SCPublicKeys []abstract.Point
 	EncShares    []*pvss.PubVerShare
 	EncProofs    []abstract.Point
@@ -31,10 +31,10 @@ type WriteTxnData struct {
 }
 
 type OTSDecryptReqData struct {
-	WriteTxnSBF  *skipchain.SkipBlockFix
-	ReadTxnSBF   *skipchain.SkipBlockFix
-	MerkleProof  *skipchain.BlockLink
-	ACPublicKeys []abstract.Point
+	WriteTxnSBF    *skipchain.SkipBlockFix
+	ReadTxnSBF     *skipchain.SkipBlockFix
+	InclusionProof *skipchain.BlockLink
+	ACPublicKeys   []abstract.Point
 }
 
 type DecryptedShare struct {

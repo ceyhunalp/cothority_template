@@ -7,6 +7,7 @@ import (
 	ots "github.com/dedis/cothority_template/ots"
 	util "github.com/dedis/cothority_template/ots/util"
 	"gopkg.in/dedis/crypto.v0/abstract"
+	"gopkg.in/dedis/crypto.v0/ed25519"
 	"gopkg.in/dedis/crypto.v0/random"
 	"gopkg.in/dedis/crypto.v0/share/pvss"
 	"gopkg.in/dedis/onet.v1/log"
@@ -30,23 +31,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	pubKeys, err := ots.GetPubKeys(pkFilePtr)
+	scPubKeys, err := ots.GetPubKeys(pkFilePtr)
 
 	if err != nil {
 		log.Errorf("Couldn't read pk file: %v", err)
 		os.Exit(1)
 	}
 
-	dataPVSS, err := ots.SetupPVSS(pubKeys, *numTrusteePtr)
-
-	//TODO: Use symKey to encrypt data
-	mesg := "Dunyali dostum, tam olarak anlamadin galiba. KACIRILDIN!"
-	log.Info("Plaintext message is:", mesg)
-	encMesg, hashEnc := ots.EncryptMessage(dataPVSS, &mesg)
-
-	if err != nil {
-		log.Errorf("Could not setup PVSS: %v", err)
-		os.Exit(1)
+	dataPVSS := util.DataPVSS{
+		Suite:        ed25519.NewAES128SHA256Ed25519(false),
+		SCPublicKeys: scPubKeys,
+		NumTrustee:   *numTrusteePtr,
 	}
 
 	// Writer's pk/sk pair
@@ -56,6 +51,18 @@ func main() {
 	// Reader's pk/sk pair
 	privKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	pubKey := dataPVSS.Suite.Point().Mul(nil, privKey)
+
+	err = ots.SetupPVSS(&dataPVSS, pubKey)
+	// dataPVSS, err := ots.SetupPVSS(pubKeys, *numTrusteePtr)
+
+	if err != nil {
+		log.Errorf("Could not setup PVSS: %v", err)
+		os.Exit(1)
+	}
+
+	mesg := "Dunyali dostum, tam olarak anlamadin galiba. KACIRILDIN!"
+	log.Info("Plaintext message is:", mesg)
+	encMesg, hashEnc := ots.EncryptMessage(&dataPVSS, &mesg)
 
 	gr := util.GetGroup(*filePtr)
 	log.Lvl3(gr)
@@ -67,10 +74,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ots.TestSkipchain(scurl, dataPVSS)
-
 	// Creating write transaction
-	writeSB, err := ots.CreateWriteTxn(scurl, dataPVSS, hashEnc, pubKey, wrPrivKey)
+	writeSB, err := ots.CreateWriteTxn(scurl, &dataPVSS, hashEnc, pubKey, wrPrivKey)
 	if err != nil {
 		log.Errorf("Could not create write transaction: %v", err)
 		os.Exit(1)
@@ -86,7 +91,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// writeTxnData.ReaderPk = wrPubKey
 	sigVerErr := ots.VerifyTxnSignature(writeTxnData, sig, wrPubKey)
 
 	if sigVerErr != nil {
@@ -105,13 +109,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Verify encrypted shares
-	_, _, err = pvss.VerifyEncShareBatch(network.Suite, writeTxnData.H, writeTxnData.SCPublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
+	////
+	// h, err := util.CreatePointH(network.Suite, pubKey)
+	// if err != nil {
+	// 	log.Errorf("Could not generate point h: %v", err)
+	// 	os.Exit(1)
+	// }
 
-	if err != nil {
-		log.Errorf("Could not verify encrypted shares in the write transaction: %v", err)
-		os.Exit(1)
-	}
+	// Verify encrypted shares
+	// _, _, err = pvss.VerifyEncShareBatch(network.Suite, writeTxnData.H, writeTxnData.SCPublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
+	// _, _, err = pvss.VerifyEncShareBatch(network.Suite, h, writeTxnData.SCPublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
+	//
+	// if err != nil {
+	// 	log.Errorf("Could not verify encrypted shares in the write transaction: %v", err)
+	// 	os.Exit(1)
+	// }
 
 	// diffSk := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	// diffPk := dataPVSS.Suite.Point().Mul(nil, diffSk)
@@ -134,7 +146,8 @@ func main() {
 	}
 
 	acPubKeys := readSB.Roster.Publics()
-	scPubKeys := writeTxnData.SCPublicKeys
+	// Bob obtains the SC public keys from T_W
+	scPubKeys = writeTxnData.SCPublicKeys
 	// ots.TestSkipchain(scurl, dataPVSS)
 	// diffSk := dataPVSS.Suite.Scalar().Pick(random.Stream)
 
@@ -156,6 +169,8 @@ func main() {
 		validDecShares = append(validDecShares, decShares[i])
 	}
 
+	// Normally Bob doesn't have dataPVSS but we are
+	// using it only for PVSS parameters for simplicity
 	recSecret, err := pvss.RecoverSecret(network.Suite, writeTxnData.G, validKeys, validEncShares, validDecShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
 
 	if err != nil {
@@ -163,6 +178,69 @@ func main() {
 		os.Exit(1)
 	}
 
-	recMesg := ots.DecryptMessage(recSecret, encMesg, writeTxnData, dataPVSS)
+	recMesg := ots.DecryptMessage(recSecret, encMesg, writeTxnData)
 	log.Info("Recovered message is:", recMesg)
+
+	////////////////////////////////////////////////////
+
+	//Creating fake write transaction
+	// fakePrivKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
+	// fakePubKey := dataPVSS.Suite.Point().Mul(nil, fakePrivKey)
+	// fakeWriteSB, err := ots.CreateWriteTxn(scurl, &dataPVSS, hashEnc, fakePubKey, wrPrivKey)
+	// if err != nil {
+	// 	log.Errorf("Could not create write txn: %v", err)
+	// 	os.Exit(1)
+	// }
+	//
+	// fakeWriteID := fakeWriteSB.Hash
+	// readSB, err = ots.CreateReadTxn(scurl, fakeWriteID, fakePrivKey)
+	// if err != nil {
+	// 	log.Errorf("Could not create read txn: %v", err)
+	// 	os.Exit(1)
+	// }
+	//
+	// updFakeWriteSB, err := ots.GetUpdatedWriteTxnSB(scurl, fakeWriteID)
+	// if err != nil {
+	// 	log.Errorf("Could not retrieve updated write txn SB: %v", err)
+	// 	os.Exit(1)
+	// }
+	//
+	// acPubKeys = readSB.Roster.Publics()
+	// // Bob obtains the SC public keys from T_W
+	// scPubKeys = writeTxnData.SCPublicKeys
+	// // ots.TestSkipchain(scurl, dataPVSS)
+	// // diffSk := dataPVSS.Suite.Scalar().Pick(random.Stream)
+	//
+	// decShares, err = ots.GetDecryptedShares(scurl, el, updFakeWriteSB, readSB.SkipBlockFix, acPubKeys, scPubKeys, fakePrivKey, readSB.Index)
+	//
+	// if err != nil {
+	// 	log.Errorf("Could not get the decrypted shares: %v", err)
+	// 	os.Exit(1)
+	// }
+	//
+	// var fakevalidKeys []abstract.Point
+	// var fakevalidEncShares []*pvss.PubVerShare
+	// var fakevalidDecShares []*pvss.PubVerShare
+	//
+	// sz = len(decShares)
+	// for i := 0; i < sz; i++ {
+	// 	fakevalidKeys = append(fakevalidKeys, writeTxnData.SCPublicKeys[i])
+	// 	fakevalidEncShares = append(fakevalidEncShares, writeTxnData.EncShares[i])
+	// 	fakevalidDecShares = append(fakevalidDecShares, decShares[i])
+	// }
+	//
+	// fmt.Println("Number of valid fake dec share:", len(fakevalidDecShares))
+	// fmt.Println("Number of valid fake enc share:", len(fakevalidEncShares))
+	// // Normally Bob doesn't have dataPVSS but we are
+	// // using it only for PVSS parameters for simplicity
+	// recSecret, err = pvss.RecoverSecret(network.Suite, writeTxnData.G, fakevalidKeys, fakevalidEncShares, fakevalidDecShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
+	//
+	// if err != nil {
+	// 	log.Errorf("Could not recover secret: %v", err)
+	// 	os.Exit(1)
+	// }
+	//
+	// recMesg = ots.DecryptMessage(recSecret, encMesg, writeTxnData)
+	// log.Info("Recovered message is:", recMesg)
+
 }

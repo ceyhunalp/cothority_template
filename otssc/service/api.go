@@ -19,14 +19,14 @@ func NewClient() *Client {
 	return &Client{Client: onet.NewClient(ServiceName)}
 }
 
-func (c *Client) OTSDecrypt(r *onet.Roster, writeTxnSBF *skipchain.SkipBlockFix, readTxnSBF *skipchain.SkipBlockFix, merkleProof *skipchain.BlockLink, acPubKeys []abstract.Point, privKey abstract.Scalar) ([]*util.DecryptedShare, onet.ClientError) {
+func (c *Client) OTSDecrypt(r *onet.Roster, writeTxnSBF *skipchain.SkipBlockFix, readTxnSBF *skipchain.SkipBlockFix, inclusionProof *skipchain.BlockLink, acPubKeys []abstract.Point, privKey abstract.Scalar) ([]*util.DecryptedShare, onet.ClientError) {
 
 	// network.RegisterMessage(&util.OTSDecryptReqData{})
 	data := &util.OTSDecryptReqData{
-		WriteTxnSBF:  writeTxnSBF,
-		ReadTxnSBF:   readTxnSBF,
-		MerkleProof:  merkleProof,
-		ACPublicKeys: acPubKeys,
+		WriteTxnSBF:    writeTxnSBF,
+		ReadTxnSBF:     readTxnSBF,
+		InclusionProof: inclusionProof,
+		ACPublicKeys:   acPubKeys,
 	}
 
 	msg, err := network.Marshal(data)
@@ -35,9 +35,6 @@ func (c *Client) OTSDecrypt(r *onet.Roster, writeTxnSBF *skipchain.SkipBlockFix,
 	}
 
 	sig, err := util.SignMessage(msg, privKey)
-	// tmpHash := sha256.Sum256(temp)
-	// mesgHash := tmpHash[:]
-	// sig, err := crypto.SignSchnorr(network.Suite, privKey, mesgHash)
 
 	if err != nil {
 		return nil, onet.NewClientErrorCode(ErrorParse, err.Error())
@@ -55,7 +52,7 @@ func (c *Client) OTSDecrypt(r *onet.Roster, writeTxnSBF *skipchain.SkipBlockFix,
 	dst := r.List[idx]
 	decryptReq.RootIndex = idx
 
-	log.Info("Root is", dst.String(), "-- Index:", idx)
+	// log.Info("Root is", dst.String(), "-- Index:", idx)
 
 	reply := &OTSDecryptResp{}
 	err = c.SendProtobuf(dst, decryptReq, reply)

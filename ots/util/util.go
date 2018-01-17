@@ -19,6 +19,18 @@ func SignMessage(msg []byte, privKey abstract.Scalar) (crypto.SchnorrSig, error)
 	return crypto.SignSchnorr(network.Suite, privKey, msgHash)
 }
 
+func CreatePointH(suite abstract.Suite, pubKey abstract.Point) (abstract.Point, error) {
+
+	binPubKey, err := pubKey.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	tmpHash := sha256.Sum256(binPubKey)
+	labelHash := tmpHash[:]
+	h, _ := suite.Point().Pick(nil, suite.Cipher(labelHash))
+	return h, nil
+}
+
 func GetGroup(tomlFileName string) *app.Group {
 	gr, err := os.Open(tomlFileName)
 	log.ErrFatal(err)
