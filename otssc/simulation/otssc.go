@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -19,17 +20,6 @@ import (
 	"gopkg.in/dedis/onet.v1/network"
 	"gopkg.in/dedis/onet.v1/simul/monitor"
 )
-
-// type ProtocolData struct {
-// 	PVSSData      *util.DataPVSS
-// 	EncMesg       []byte
-// 	WriteTxnSB    *skipchain.SkipBlock
-// 	WriteTxnData  *util.WriteTxnData
-// 	ReadTxnSBF    *skipchain.SkipBlockFix
-// 	ACPublicKeys  []abstract.Point
-// 	ReaderPrivKey abstract.Scalar
-// 	ReadSBIndex int
-// }
 
 func init() {
 	onet.SimulationRegister("OTS", NewOTSSimulation)
@@ -82,17 +72,23 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 
 	numTrustee := config.Tree.Size()
 
+	mesg := make([]byte, 1024*1024)
+	for i := 0; i < 1024*1024; i++ {
+		mesg[i] = 'w'
+	}
+	// mesg := "Dunyali dostum, tam olarak anlamadin galiba. KACIRILDIN!"
+	// log.Info("Plaintext message is:", mesg)
+	create_sc := monitor.NewTimeMeasure("CreateSC")
+	scurl, err := ots.CreateSkipchain(acRoster)
+	create_sc.Record()
+
+	if err != nil {
+		log.Errorf("Could not create skipchain: %v", err)
+		os.Exit(1)
+	}
+
 	for round := 0; round < otss.Rounds; round++ {
 		log.Info("Round:", round)
-
-		create_sc := monitor.NewTimeMeasure("CreateSC")
-		scurl, err := ots.CreateSkipchain(acRoster)
-		create_sc.Record()
-
-		if err != nil {
-			log.Errorf("Could not create skipchain: %v", err)
-			os.Exit(1)
-		}
 
 		// Transactions with trustee size = 10
 		// Total block # = 2 x dummyTxnCount
@@ -104,33 +100,33 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			NumTrustee:   numTrustee,
 		}
 
-		create_keys := monitor.NewTimeMeasure("CreateKeys")
+		// create_keys := monitor.NewTimeMeasure("CreateKeys")
 		wrPrivKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 		wrPubKey := dataPVSS.Suite.Point().Mul(nil, wrPrivKey)
 		// Reader's pk/sk pair
 		privKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 		pubKey := dataPVSS.Suite.Point().Mul(nil, privKey)
-		create_keys.Record()
+		// create_keys.Record()
 
-		setup_pvss := monitor.NewTimeMeasure("SetupPVSS")
+		// setup_pvss := monitor.NewTimeMeasure("SetupPVSS")
+		write_txn_prep := monitor.NewTimeMeasure("WriteTxnPrep")
 		err = ots.SetupPVSS(&dataPVSS, pubKey)
 		// dataPVSS, err := ots.SetupPVSS(scPubKeys, numTrustee)
-		setup_pvss.Record()
+		// setup_pvss.Record()
 
 		if err != nil {
 			return err
 		}
 
-		mesg := "Dunyali dostum, tam olarak anlamadin galiba. KACIRILDIN!"
-		log.Info("Plaintext message is:", mesg)
+		// encry_mesg := monitor.NewTimeMeasure("EncryptMesg")
+		// encMesg, hashEnc := ots.EncryptMessage(&dataPVSS, &mesg)
+		encMesg, hashEnc := ots.EncryptMessage(&dataPVSS, mesg)
+		write_txn_prep.Record()
+		// encry_mesg.Record()
 
-		encry_mesg := monitor.NewTimeMeasure("EncryptMesg")
-		encMesg, hashEnc := ots.EncryptMessage(&dataPVSS, &mesg)
-		encry_mesg.Record()
-
-		create_wrt_txn := monitor.NewTimeMeasure("CreateWriteTxn")
+		// create_wrt_txn := monitor.NewTimeMeasure("CreateWriteTxn")
 		writeSB, err := ots.CreateWriteTxn(scurl, &dataPVSS, hashEnc, pubKey, wrPrivKey)
-		create_wrt_txn.Record()
+		// create_wrt_txn.Record()
 
 		if err != nil {
 			log.Errorf("Could not create write transaction: %v", err)
@@ -141,18 +137,18 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		writeID := writeSB.Hash
 
 		// Get write transaction from skipchain
-		get_write_txn_sb := monitor.NewTimeMeasure("GetWriteTxnSB")
+		// get_write_txn_sb := monitor.NewTimeMeasure("GetWriteTxnSB")
 		writeSB, writeTxnData, txnSig, err := ots.GetWriteTxnSB(scurl, writeID)
-		get_write_txn_sb.Record()
+		// get_write_txn_sb.Record()
 
 		if err != nil {
 			log.Errorf("Could not retrieve write transaction block: %v", err)
 			os.Exit(1)
 		}
 
-		ver_txn_sig := monitor.NewTimeMeasure("VerifyTxnSig")
+		// ver_txn_sig := monitor.NewTimeMeasure("VerifyTxnSig")
 		sigVerErr := ots.VerifyTxnSignature(writeTxnData, txnSig, wrPubKey)
-		ver_txn_sig.Record()
+		// ver_txn_sig.Record()
 
 		if sigVerErr != nil {
 			log.Errorf("Signature verification failed on the write transaction: %v", sigVerErr)
@@ -161,9 +157,9 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 
 		log.Info("Signature verified on the retrieved write transaction")
 
-		ver_enc_mesg := monitor.NewTimeMeasure("VerifyEncMesg")
+		// ver_enc_mesg := monitor.NewTimeMeasure("VerifyEncMesg")
 		validHash := ots.VerifyEncMesg(writeTxnData, encMesg)
-		ver_enc_mesg.Record()
+		// ver_enc_mesg.Record()
 
 		if validHash != 0 {
 			os.Exit(1)
@@ -184,18 +180,18 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		// 	os.Exit(1)
 		// }
 
-		create_read_txn := monitor.NewTimeMeasure("CreateReadTxn")
+		// create_read_txn := monitor.NewTimeMeasure("CreateReadTxn")
 		readSB, err := ots.CreateReadTxn(scurl, writeID, privKey)
-		create_read_txn.Record()
+		// create_read_txn.Record()
 
 		if err != nil {
 			log.Errorf("Could not create read transaction: %v", err)
 			os.Exit(1)
 		}
 
-		get_upd_wsb := monitor.NewTimeMeasure("GetUpdatedWriteSB")
+		// get_upd_wsb := monitor.NewTimeMeasure("GetUpdatedWriteSB")
 		updWriteSB, err := ots.GetUpdatedWriteTxnSB(scurl, writeID)
-		get_upd_wsb.Record()
+		// get_upd_wsb.Record()
 		if err != nil {
 			log.Errorf("Could not retrieve updated write txn SB: %v", err)
 			os.Exit(1)
@@ -239,7 +235,7 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		proto.DecReqData = data
 		proto.RootIndex = 0
 
-		prep_decreq := monitor.NewTimeMeasure("PrepDecReq")
+		// prep_decreq := monitor.NewTimeMeasure("PrepDecReq")
 		msg, err := network.Marshal(data)
 		if err != nil {
 			return err
@@ -248,7 +244,7 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		if err != nil {
 			return err
 		}
-		prep_decreq.Record()
+		// prep_decreq.Record()
 
 		proto.Signature = &sig
 
@@ -257,11 +253,9 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		reencShares := <-proto.DecShares
 		dec_req.Record()
 
-		fmt.Println("DecReq:", dec_req.Wall.Value, dec_req.CPU.Value, dec_req.User.Value)
-
-		dec_reenc_shares := monitor.NewTimeMeasure("DecryptReencShares")
+		// dec_reenc_shares := monitor.NewTimeMeasure("DecryptReencShares")
 		tmpDecShares, err := ots.DHDecrypt(reencShares, scPubKeys, privKey)
-		dec_reenc_shares.Record()
+		// dec_reenc_shares.Record()
 
 		if err != nil {
 			return err
@@ -274,6 +268,7 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			decShares[tmpDecShares[i].S.I] = tmpDecShares[i]
 		}
 
+		recover_sec := monitor.NewTimeMeasure("RecoverSecret")
 		var validKeys []abstract.Point
 		var validEncShares []*pvss.PubVerShare
 		var validDecShares []*pvss.PubVerShare
@@ -284,19 +279,20 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			validDecShares = append(validDecShares, decShares[i])
 		}
 
-		ver_recons_pvss := monitor.NewTimeMeasure("VerifyandReconstructPVSS")
+		// ver_recons_pvss := monitor.NewTimeMeasure("VerifyandReconstructPVSS")
 		recSecret, err := pvss.RecoverSecret(dataPVSS.Suite, writeTxnData.G, validKeys, validEncShares, validDecShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
-		ver_recons_pvss.Record()
+		// ver_recons_pvss.Record()
 
 		if err != nil {
 			return err
 		}
 
-		dec_mesg := monitor.NewTimeMeasure("DecryptMessage")
+		// dec_mesg := monitor.NewTimeMeasure("DecryptMessage")
 		recvMesg := ots.DecryptMessage(recSecret, encMesg, writeTxnData)
-		dec_mesg.Record()
-		log.Info("Recovered message is:", recvMesg)
-
+		recover_sec.Record()
+		// dec_mesg.Record()
+		// log.Info("Recovered message is:", recvMesg)
+		log.Info("Recovered message:", bytes.Compare(mesg, recvMesg))
 	}
 	return nil
 }

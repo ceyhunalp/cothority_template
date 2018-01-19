@@ -22,7 +22,8 @@ import (
 
 func AddDummyTxnPairs(scurl *ocs.SkipChainURL, dp *util.DataPVSS, pairCount int) error {
 	mesg := "Bana istediginiz kadar gidip gelebilirsiniz."
-	encMesg, hashEnc := EncryptMessage(dp, &mesg)
+	encMesg, hashEnc := EncryptMessage(dp, []byte(mesg))
+	// encMesg, hashEnc := EncryptMessage(dp, &mesg)
 	log.Lvl3(encMesg)
 
 	writerSK := make([]abstract.Scalar, pairCount)
@@ -228,20 +229,23 @@ func VerifyEncMesg(wtd *util.WriteTxnData, encMesg []byte) int {
 	return bytes.Compare(cmptHash, wtd.HashEnc)
 }
 
-func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *util.WriteTxnData) (mesg string) {
+func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *util.WriteTxnData) (mesg []byte) {
+	// func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *util.WriteTxnData) (mesg string) {
 
 	g_s, _ := recSecret.MarshalBinary()
 	tempSymKey := sha256.Sum256(g_s)
 	symKey := tempSymKey[:]
 	cipher := network.Suite.Cipher(symKey)
 	decMesg, _ := cipher.Open(nil, encMesg)
-	mesg = string(decMesg)
-	return mesg
+	return decMesg
+	// mesg = string(decMesg)
+	// return mesg
 }
 
-func EncryptMessage(dp *util.DataPVSS, msg *string) (encMesg []byte, hashEnc []byte) {
+func EncryptMessage(dp *util.DataPVSS, mesg []byte) (encMesg []byte, hashEnc []byte) {
+	// func EncryptMessage(dp *util.DataPVSS, msg *string) (encMesg []byte, hashEnc []byte) {
 
-	mesg := []byte(*msg)
+	// mesg := []byte(*msg)
 	g_s, _ := dp.Suite.Point().Mul(nil, dp.Secret).MarshalBinary()
 	tempSymKey := sha256.Sum256(g_s)
 	symKey := tempSymKey[:]
