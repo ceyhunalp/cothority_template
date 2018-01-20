@@ -54,7 +54,6 @@ func (otss *OTSSimulation) Setup(dir string, hosts []string) (*onet.SimulationCo
 }
 
 func (otss *OTSSimulation) Node(config *onet.SimulationConfig) error {
-	// log.Info("In Node")
 	return otss.SimulationBFTree.Node(config)
 }
 
@@ -72,12 +71,12 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 
 	numTrustee := config.Tree.Size()
 
-	mesg := make([]byte, 1024*1024)
-	for i := 0; i < 1024*1024; i++ {
+	mesgSize := 1024 * 1024
+	mesg := make([]byte, mesgSize)
+	for i := 0; i < mesgSize; i++ {
 		mesg[i] = 'w'
 	}
-	// mesg := "Dunyali dostum, tam olarak anlamadin galiba. KACIRILDIN!"
-	// log.Info("Plaintext message is:", mesg)
+
 	create_sc := monitor.NewTimeMeasure("CreateSC")
 	scurl, err := ots.CreateSkipchain(acRoster)
 	create_sc.Record()
@@ -118,8 +117,6 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			return err
 		}
 
-		// encry_mesg := monitor.NewTimeMeasure("EncryptMesg")
-		// encMesg, hashEnc := ots.EncryptMessage(&dataPVSS, &mesg)
 		encMesg, hashEnc := ots.EncryptMessage(&dataPVSS, mesg)
 		write_txn_prep.Record()
 		// encry_mesg.Record()
@@ -165,21 +162,6 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			os.Exit(1)
 		}
 
-		// h, err := util.CreatePointH(network.Suite, pubKey)
-		// if err != nil {
-		// 	log.Errorf("Could not generate point h: %v", err)
-		// 	os.Exit(1)
-		// }
-		// // Verify encrypted shares
-		// ver_enc_shares := monitor.NewTimeMeasure("VerifyEncShares")
-		// _, _, err = pvss.VerifyEncShareBatch(network.Suite, h, writeTxnData.SCPublicKeys, writeTxnData.EncProofs, writeTxnData.EncShares)
-		// ver_enc_shares.Record()
-		//
-		// if err != nil {
-		// 	log.Errorf("Could not verify encrypted shares in the write transaction: %v", err)
-		// 	os.Exit(1)
-		// }
-
 		// create_read_txn := monitor.NewTimeMeasure("CreateReadTxn")
 		readSB, err := ots.CreateReadTxn(scurl, writeID, privKey)
 		// create_read_txn.Record()
@@ -198,12 +180,7 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		}
 
 		acPubKeys := readSB.Roster.Publics()
-
-		fmt.Println("AC Public Keys length:", len(acPubKeys))
-
 		readTxnSBF := readSB.SkipBlockFix
-
-		// protoData := initialOTSSteps(scurl, dataPVSS, encMesg, hashEnc)
 
 		p, err := config.Overlay.CreateProtocol("otssc", config.Tree, onet.NilServiceID)
 
@@ -212,7 +189,6 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		}
 
 		// GetDecryptedShares call preparation
-
 		log.Info("Write index is:", updWriteSB.Index)
 		idx := readSB.Index - updWriteSB.Index - 1
 		if idx < 0 {
@@ -254,7 +230,8 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		dec_req.Record()
 
 		// dec_reenc_shares := monitor.NewTimeMeasure("DecryptReencShares")
-		tmpDecShares, err := ots.DHDecrypt(reencShares, scPubKeys, privKey)
+		// tmpDecShares, err := ots.DHDecrypt(reencShares, scPubKeys, privKey)
+		tmpDecShares, err := ots.ElGamalDecrypt(reencShares, privKey)
 		// dec_reenc_shares.Record()
 
 		if err != nil {
@@ -290,8 +267,6 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		// dec_mesg := monitor.NewTimeMeasure("DecryptMessage")
 		recvMesg := ots.DecryptMessage(recSecret, encMesg, writeTxnData)
 		recover_sec.Record()
-		// dec_mesg.Record()
-		// log.Info("Recovered message is:", recvMesg)
 		log.Info("Recovered message:", bytes.Compare(mesg, recvMesg))
 	}
 	return nil

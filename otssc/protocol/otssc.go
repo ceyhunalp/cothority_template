@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/dedis/crypto.v0/abstract"
 	"gopkg.in/dedis/crypto.v0/cosi"
+	"gopkg.in/dedis/crypto.v0/random"
 	"gopkg.in/dedis/crypto.v0/share/pvss"
 	"gopkg.in/dedis/onet.v1"
 	"gopkg.in/dedis/onet.v1/crypto"
@@ -32,9 +33,10 @@ type OTSDecrypt struct {
 	ChannelAnnounce chan StructAnnounceDecrypt
 	ChannelReply    chan []StructDecryptReply
 	DecShares       chan []*util.DecryptedShare
-	DecReqData      *util.OTSDecryptReqData
-	Signature       *crypto.SchnorrSig
-	RootIndex       int
+	// DecShares       chan []*util.DecryptedShare
+	DecReqData *util.OTSDecryptReqData
+	Signature  *crypto.SchnorrSig
+	RootIndex  int
 }
 
 func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
@@ -62,7 +64,6 @@ func (p *OTSDecrypt) Start() error {
 	log.Lvl3("Starting OTSDecrypt")
 	for _, c := range p.Children() {
 
-		// log.Info("In OTSSC:", *p.Signature)
 		err := p.SendTo(c, &AnnounceDecrypt{
 			DecReqData: p.DecReqData,
 			Signature:  p.Signature,
@@ -89,14 +90,6 @@ func (p *OTSDecrypt) Dispatch() error {
 			idx--
 		}
 
-		// binKey, err := writeTxnData.ReaderPk.MarshalBinary()
-		// if err != nil {
-		// 	return err
-		// }
-		// tmpHash := sha256.Sum256(binKey)
-		// labelHash := tmpHash[:]
-		// h, _ := network.Suite.Point().Pick(nil, network.Suite.Cipher(labelHash))
-
 		h, err := util.CreatePointH(network.Suite, writeTxnData.ReaderPk)
 		if err != nil {
 			log.Error(p.Info(), "Failed to generate point h", p.Name(), err)
@@ -109,14 +102,17 @@ func (p *OTSDecrypt) Dispatch() error {
 
 		tempSh, err := pvss.DecShare(network.Suite, h, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
 
-		// tempSh, err := pvss.DecShare(network.Suite, writeTxnData.H, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
-
 		if err != nil {
 			log.Error(p.Info(), "Failed to decrypt share", p.Name(), err)
-			ds.Data = []byte{}
+			// ds.Data = []byte{}
+			ds.K = nil
+			ds.Cs = nil
 		} else {
-			reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
-			ds.Data = reencSh
+			K, Cs := elGamalEncrypt(tempSh, writeTxnData.ReaderPk)
+			ds.K = K
+			ds.Cs = Cs
+			// reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
+			// ds.Data = reencSh
 		}
 
 		err = p.SendTo(p.Parent(), &DecryptReply{ds})
@@ -145,13 +141,6 @@ func (p *OTSDecrypt) Dispatch() error {
 		log.Error(p.Info(), "Failed to generate point h", p.Name(), err)
 		return err
 	}
-	// binKey, err := writeTxnData.ReaderPk.MarshalBinary()
-	// if err != nil {
-	// 	return err
-	// }
-	// tmpHash := sha256.Sum256(binKey)
-	// labelHash := tmpHash[:]
-	// h, _ := network.Suite.Point().Pick(nil, network.Suite.Cipher(labelHash))
 
 	ds := &util.DecryptedShare{
 		Index: p.Index(),
@@ -163,10 +152,15 @@ func (p *OTSDecrypt) Dispatch() error {
 
 	if err != nil {
 		log.Error(p.Info(), "Failed to decrypt share", p.Name(), err)
-		ds.Data = []byte{}
+		// ds.Data = []byte{}
+		ds.K = nil
+		ds.Cs = nil
 	} else {
-		reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
-		ds.Data = reencSh
+		// reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
+		// ds.Data = reencSh
+		K, Cs := elGamalEncrypt(tempSh, writeTxnData.ReaderPk)
+		ds.K = K
+		ds.Cs = Cs
 	}
 
 	decShares = append(decShares, ds)
@@ -174,6 +168,35 @@ func (p *OTSDecrypt) Dispatch() error {
 	log.Lvl3(p.ServerIdentity().Address, "is done with total of", len(decShares))
 	p.DecShares <- decShares
 	return nil
+}
+
+func elGamalEncrypt(ds *pvss.PubVerShare, rPubKey abstract.Point) (abstract.Point, []abstract.Point) {
+
+	msg, err := network.Marshal(ds)
+	if err != nil {
+		log.Errorf("Failed to marshall: %v", err)
+		return nil, nil
+	}
+
+	var Cs []abstract.Point
+	k := network.Suite.Scalar().Pick(random.Stream)
+	K := network.Suite.Point().Mul(nil, k)
+	S := network.Suite.Point().Mul(rPubKey, k)
+
+	for len(msg) > 0 {
+		kp, _ := network.Suite.Point().Pick(msg, random.Stream)
+		Cs = append(Cs, network.Suite.Point().Add(S, kp))
+		msg = msg[min(len(msg), kp.PickLen()):]
+	}
+
+	return K, Cs
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func reencryptShare(ds *pvss.PubVerShare, rPubKey abstract.Point, privKey abstract.Scalar) []byte {

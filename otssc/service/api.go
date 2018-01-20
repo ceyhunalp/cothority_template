@@ -52,8 +52,6 @@ func (c *Client) OTSDecrypt(r *onet.Roster, writeTxnSBF *skipchain.SkipBlockFix,
 	dst := r.List[idx]
 	decryptReq.RootIndex = idx
 
-	// log.Info("Root is", dst.String(), "-- Index:", idx)
-
 	reply := &OTSDecryptResp{}
 	err = c.SendProtobuf(dst, decryptReq, reply)
 	if err != nil {

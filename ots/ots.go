@@ -16,16 +16,12 @@ import (
 	"gopkg.in/dedis/crypto.v0/share/pvss"
 	"gopkg.in/dedis/onet.v1"
 	"gopkg.in/dedis/onet.v1/crypto"
-	"gopkg.in/dedis/onet.v1/log"
 	"gopkg.in/dedis/onet.v1/network"
 )
 
 func AddDummyTxnPairs(scurl *ocs.SkipChainURL, dp *util.DataPVSS, pairCount int) error {
 	mesg := "Bana istediginiz kadar gidip gelebilirsiniz."
-	encMesg, hashEnc := EncryptMessage(dp, []byte(mesg))
-	// encMesg, hashEnc := EncryptMessage(dp, &mesg)
-	log.Lvl3(encMesg)
-
+	_, hashEnc := EncryptMessage(dp, []byte(mesg))
 	writerSK := make([]abstract.Scalar, pairCount)
 	writerPK := make([]abstract.Point, pairCount)
 	readerSK := make([]abstract.Scalar, pairCount)
@@ -55,63 +51,67 @@ func AddDummyTxnPairs(scurl *ocs.SkipChainURL, dp *util.DataPVSS, pairCount int)
 	return nil
 }
 
-// func TestSkipchain(scurl *ocs.SkipChainURL, dp *util.DataPVSS) {
-//
-// 	mesg := "Bana istediginiz kadar gidip gelebilirsiniz."
-// 	encMesg, hashEnc := EncryptMessage(dp, &mesg)
-// 	log.Lvl3(encMesg)
-// 	count := 5
-// 	writerSK := make([]abstract.Scalar, count)
-// 	writerPK := make([]abstract.Point, count)
-// 	readerSK := make([]abstract.Scalar, count)
-// 	readerPK := make([]abstract.Point, count)
-// 	sbWrite := make([]*skipchain.SkipBlock, count)
-// 	sbRead := make([]*skipchain.SkipBlock, count)
-//
-// 	for i := 0; i < count; i++ {
-// 		readerSK[i] = dp.Suite.Scalar().Pick(random.Stream)
-// 		readerPK[i] = dp.Suite.Point().Mul(nil, readerSK[i])
-// 		writerSK[i] = dp.Suite.Scalar().Pick(random.Stream)
-// 		writerPK[i] = dp.Suite.Point().Mul(nil, writerSK[i])
-// 		tmp, _ := CreateWriteTxn(scurl, dp, hashEnc, readerPK[i], writerSK[i])
-// 		sbWrite[i] = tmp
-// 	}
-//
-// 	for i := 0; i < count-1; i++ {
-// 		tmp, _ := CreateReadTxn(scurl, sbWrite[i].Hash, readerSK[i])
-// 		sbRead[i] = tmp
-// 	}
-//
-// }
+func ElGamalDecrypt(shares []*util.DecryptedShare, privKey abstract.Scalar) ([]*pvss.PubVerShare, error) {
 
-func DHDecrypt(shares []*util.DecryptedShare, scPubKeys []abstract.Point, privKey abstract.Scalar) ([]*pvss.PubVerShare, error) {
-
-	// network.RegisterMessage(&pvss.PubVerShare{})
 	size := len(shares)
 	decShares := make([]*pvss.PubVerShare, size)
 
 	for i := 0; i < size; i++ {
 		tmp := shares[i]
-		shSec, err := network.Suite.Point().Mul(scPubKeys[tmp.Index], privKey).MarshalBinary()
-		if err != nil {
-			return nil, err
+		var decSh []byte
+		for _, C := range tmp.Cs {
+			S := network.Suite.Point().Mul(tmp.K, privKey)
+			decShPart := network.Suite.Point().Sub(C, S)
+			decShPartData, _ := decShPart.Data()
+			decSh = append(decSh, decShPartData...)
 		}
-		tempSymKey := sha256.Sum256(shSec)
-		symKey := tempSymKey[:]
-		cipher := network.Suite.Cipher(symKey)
-		decMesg, err := cipher.Open(nil, tmp.Data)
-		if err != nil {
-			return nil, err
-		}
-		_, tmpSh, err := network.Unmarshal(decMesg)
+
+		_, tmpSh, err := network.Unmarshal(decSh)
 		if err != nil {
 			return nil, err
 		}
 		sh := tmpSh.(*pvss.PubVerShare)
 		decShares[i] = sh
+
+		// _, tmpSh, err := network.Unmarshal(decMesg)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		// sh := tmpSh.(*pvss.PubVerShare)
+		// decShares[i] = sh
 	}
 	return decShares, nil
+
 }
+
+// func DHDecrypt(shares []*util.DecryptedShare, scPubKeys []abstract.Point, privKey abstract.Scalar) ([]*pvss.PubVerShare, error) {
+//
+// 	// network.RegisterMessage(&pvss.PubVerShare{})
+// 	size := len(shares)
+// 	decShares := make([]*pvss.PubVerShare, size)
+//
+// 	for i := 0; i < size; i++ {
+// 		tmp := shares[i]
+// 		shSec, err := network.Suite.Point().Mul(scPubKeys[tmp.Index], privKey).MarshalBinary()
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		tempSymKey := sha256.Sum256(shSec)
+// 		symKey := tempSymKey[:]
+// 		cipher := network.Suite.Cipher(symKey)
+// 		decMesg, err := cipher.Open(nil, tmp.Data)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		_, tmpSh, err := network.Unmarshal(decMesg)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		sh := tmpSh.(*pvss.PubVerShare)
+// 		decShares[i] = sh
+// 	}
+// 	return decShares, nil
+// }
 
 func GetDecryptedShares(scurl *ocs.SkipChainURL, el *onet.Roster, writeTxnSB *skipchain.SkipBlock, readTxnSBF *skipchain.SkipBlockFix, acPubKeys []abstract.Point, scPubKeys []abstract.Point, privKey abstract.Scalar, index int) ([]*pvss.PubVerShare, error) {
 
@@ -134,7 +134,8 @@ func GetDecryptedShares(scurl *ocs.SkipChainURL, el *onet.Roster, writeTxnSB *sk
 		return nil, cerr
 	}
 
-	tmpDecShares, err := DHDecrypt(reencShares, scPubKeys, privKey)
+	// tmpDecShares, err := DHDecrypt(reencShares, scPubKeys, privKey)
+	tmpDecShares, err := ElGamalDecrypt(reencShares, privKey)
 
 	if err != nil {
 		return nil, err
@@ -192,8 +193,7 @@ func GetWriteTxnSB(scurl *ocs.SkipChainURL, dataID skipchain.SkipBlockID) (sbWri
 
 	sig = tmpTxn.Signature
 	writeTxnData = &util.WriteTxnData{
-		G: tmpTxn.Data.G,
-		// H:            tmpTxn.Data.H,
+		G:            tmpTxn.Data.G,
 		SCPublicKeys: tmpTxn.Data.SCPublicKeys,
 		EncShares:    tmpTxn.Data.EncShares,
 		EncProofs:    tmpTxn.Data.EncProofs,
@@ -210,7 +210,6 @@ func CreateWriteTxn(scurl *ocs.SkipChainURL, dp *util.DataPVSS, hashEnc []byte, 
 	readList := make([]abstract.Point, 1)
 	readList[0] = pubKey
 	sb, err = cl.WriteTxnRequest(scurl, dp.G, dp.SCPublicKeys, dp.EncShares, dp.EncProofs, hashEnc, readList, wrPrivKey)
-	// sb, err = cl.WriteTxnRequest(scurl, dp.G, dp.H, dp.SCPublicKeys, dp.EncShares, dp.EncProofs, hashEnc, readList, wrPrivKey)
 	return sb, err
 }
 
@@ -230,7 +229,6 @@ func VerifyEncMesg(wtd *util.WriteTxnData, encMesg []byte) int {
 }
 
 func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *util.WriteTxnData) (mesg []byte) {
-	// func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *util.WriteTxnData) (mesg string) {
 
 	g_s, _ := recSecret.MarshalBinary()
 	tempSymKey := sha256.Sum256(g_s)
@@ -238,14 +236,10 @@ func DecryptMessage(recSecret abstract.Point, encMesg []byte, wtd *util.WriteTxn
 	cipher := network.Suite.Cipher(symKey)
 	decMesg, _ := cipher.Open(nil, encMesg)
 	return decMesg
-	// mesg = string(decMesg)
-	// return mesg
 }
 
 func EncryptMessage(dp *util.DataPVSS, mesg []byte) (encMesg []byte, hashEnc []byte) {
-	// func EncryptMessage(dp *util.DataPVSS, msg *string) (encMesg []byte, hashEnc []byte) {
 
-	// mesg := []byte(*msg)
 	g_s, _ := dp.Suite.Point().Mul(nil, dp.Secret).MarshalBinary()
 	tempSymKey := sha256.Sum256(g_s)
 	symKey := tempSymKey[:]
@@ -257,23 +251,13 @@ func EncryptMessage(dp *util.DataPVSS, mesg []byte) (encMesg []byte, hashEnc []b
 }
 
 func SetupPVSS(dp *util.DataPVSS, pubKey abstract.Point) error {
-	// func SetupPVSS(scPubKeys []abstract.Point, numTrustee int) (dp *util.DataPVSS, err error) {
 
-	// suite := ed25519.NewAES128SHA256Ed25519(false)
 	g := dp.Suite.Point().Base()
-	// binPubKey, err := pubKey.MarshalBinary()
-	// if err != nil {
-	// 	return err
-	// }
-	// tmpHash := sha256.Sum256(binPubKey)
-	// labelHash := tmpHash[:]
-	// h, _ := dp.Suite.Point().Pick(nil, dp.Suite.Cipher(labelHash))
 	h, err := util.CreatePointH(dp.Suite, pubKey)
 	if err != nil {
 		return err
 	}
 
-	// h, _ := dp.Suite.Point().Pick(nil, dp.Suite.Cipher([]byte("H")))
 	secret := dp.Suite.Scalar().Pick(random.Stream)
 	threshold := 2*dp.NumTrustee/3 + 1
 
@@ -285,7 +269,6 @@ func SetupPVSS(dp *util.DataPVSS, pubKey abstract.Point) error {
 		for i := 0; i < dp.NumTrustee; i++ {
 			encProofs[i] = commitPoly.Eval(encShares[i].S.I).V
 		}
-
 		dp.Threshold = threshold
 		dp.G = g
 		dp.H = h
@@ -293,21 +276,8 @@ func SetupPVSS(dp *util.DataPVSS, pubKey abstract.Point) error {
 		dp.EncShares = encShares
 		dp.EncProofs = encProofs
 		return nil
-		// dp = &util.DataPVSS{
-		// 	NumTrustee:   numTrustee,
-		// 	Threshold:    threshold,
-		// 	Suite:        suite,
-		// 	G:            g,
-		// 	H:            h,
-		// 	Secret:       secret,
-		// 	SCPublicKeys: scPubKeys,
-		// 	EncShares:    encShares,
-		// 	EncProofs:    encProofs,
-		// }
-		// return dp, nil
 	} else {
 		return err
-		// return nil, err
 	}
 }
 
@@ -316,16 +286,15 @@ func GetPubKeys(fname *string) ([]abstract.Point, error) {
 	var keys []abstract.Point
 	fh, err := os.Open(*fname)
 	defer fh.Close()
+
 	if err != nil {
 		return nil, err
 	}
-	fs := bufio.NewScanner(fh)
 
+	fs := bufio.NewScanner(fh)
 	for fs.Scan() {
-		// tmp, _ := crypto.StringHexToPoint(network.Suite, fs.Text())
 		tmp, _ := crypto.String64ToPoint(network.Suite, fs.Text())
 		keys = append(keys, tmp)
 	}
-
 	return keys, nil
 }
