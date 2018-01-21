@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"os"
+	"syscall"
 
 	"gopkg.in/dedis/crypto.v0/abstract"
 	onet "gopkg.in/dedis/onet.v1"
@@ -12,6 +13,25 @@ import (
 	"gopkg.in/dedis/onet.v1/log"
 	"gopkg.in/dedis/onet.v1/network"
 )
+
+func iiToF(sec int64, usec int64) float64 {
+	return float64(sec) + float64(usec)/1000000.0
+}
+
+func GetRTime() (tSys, tUsr float64) {
+	rusage := &syscall.Rusage{}
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, rusage); err != nil {
+		log.Error("Couldn't get rusage time:", err)
+		return -1, -1
+	}
+	s, u := rusage.Stime, rusage.Utime
+	return iiToF(int64(s.Sec), int64(s.Usec)), iiToF(int64(u.Sec), int64(u.Usec))
+}
+
+func GetDiffRTime(tSys, tUsr float64) (tDiffSys, tDiffUsr float64) {
+	nowSys, nowUsr := GetRTime()
+	return nowSys - tSys, nowUsr - tUsr
+}
 
 func SignMessage(msg []byte, privKey abstract.Scalar) (crypto.SchnorrSig, error) {
 	tmpHash := sha256.Sum256(msg)

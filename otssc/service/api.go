@@ -7,7 +7,6 @@ import (
 	"github.com/dedis/cothority_template/ots/util"
 	"gopkg.in/dedis/crypto.v0/abstract"
 	"gopkg.in/dedis/onet.v1"
-	"gopkg.in/dedis/onet.v1/log"
 	"gopkg.in/dedis/onet.v1/network"
 )
 
@@ -28,14 +27,12 @@ func (c *Client) OTSDecrypt(r *onet.Roster, writeTxnSBF *skipchain.SkipBlockFix,
 		InclusionProof: inclusionProof,
 		ACPublicKeys:   acPubKeys,
 	}
-
 	msg, err := network.Marshal(data)
 	if err != nil {
 		return nil, onet.NewClientErrorCode(ErrorParse, err.Error())
 	}
 
 	sig, err := util.SignMessage(msg, privKey)
-
 	if err != nil {
 		return nil, onet.NewClientErrorCode(ErrorParse, err.Error())
 	}
@@ -45,13 +42,9 @@ func (c *Client) OTSDecrypt(r *onet.Roster, writeTxnSBF *skipchain.SkipBlockFix,
 		Data:      data,
 		Signature: &sig,
 	}
-
-	log.Lvl3("Roster length is", len(r.List))
-
 	idx := rand.Int() % len(r.List)
 	dst := r.List[idx]
 	decryptReq.RootIndex = idx
-
 	reply := &OTSDecryptResp{}
 	err = c.SendProtobuf(dst, decryptReq, reply)
 	if err != nil {

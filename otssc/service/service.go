@@ -42,13 +42,14 @@ func init() {
 
 func (s *OTSSCService) OTSDecryptReq(req *OTSDecryptReq) (*OTSDecryptResp, onet.ClientError) {
 	log.Lvl3("OTSDecryptReq received in service")
-
+	// Tree with depth = 1
 	childCount := len(req.Roster.List) - 1
 	log.Lvl3("Number of childs:", childCount)
 	tree := req.Roster.GenerateNaryTreeWithRoot(childCount, s.ServerIdentity())
 	if tree == nil {
 		return nil, onet.NewClientErrorCode(ErrorParse, "couldn't create tree")
 	}
+
 	pi, err := s.CreateProtocol(protocol.Name, tree)
 	if err != nil {
 		return nil, onet.NewClientError(err)
@@ -58,9 +59,7 @@ func (s *OTSSCService) OTSDecryptReq(req *OTSDecryptReq) (*OTSDecryptResp, onet.
 	otsDec.DecReqData = req.Data
 	otsDec.Signature = req.Signature
 	otsDec.RootIndex = req.RootIndex
-
 	err = pi.Start()
-
 	if err != nil {
 		return nil, onet.NewClientError(err)
 	}

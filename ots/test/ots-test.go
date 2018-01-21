@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"os"
 
@@ -20,18 +21,22 @@ func main() {
 	pkFilePtr := flag.String("p", "", "pk.txt file")
 	dbgPtr := flag.Int("d", 0, "debug level")
 	flag.Parse()
-
 	log.SetDebugVisible(*dbgPtr)
 
 	el, err := util.ReadRoster(*filePtr)
-
 	if err != nil {
 		log.Errorf("Couldn't read group.toml file: %v", err)
 		os.Exit(1)
 	}
 
-	scPubKeys, err := ots.GetPubKeys(pkFilePtr)
+	gr := util.GetGroup(*filePtr)
+	scurl, err := ots.CreateSkipchain(gr.Roster)
+	if err != nil {
+		log.Errorf("Could not create skipchain: %v", err)
+		os.Exit(1)
+	}
 
+	scPubKeys, err := ots.GetPubKeys(pkFilePtr)
 	if err != nil {
 		log.Errorf("Couldn't read pk file: %v", err)
 		os.Exit(1)
@@ -42,17 +47,14 @@ func main() {
 		SCPublicKeys: scPubKeys,
 		NumTrustee:   *numTrusteePtr,
 	}
-
 	// Writer's pk/sk pair
 	wrPrivKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	wrPubKey := dataPVSS.Suite.Point().Mul(nil, wrPrivKey)
-
 	// Reader's pk/sk pair
 	privKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 	pubKey := dataPVSS.Suite.Point().Mul(nil, privKey)
 
 	err = ots.SetupPVSS(&dataPVSS, pubKey)
-
 	if err != nil {
 		log.Errorf("Could not setup PVSS: %v", err)
 		os.Exit(1)
@@ -63,15 +65,9 @@ func main() {
 	for i := 0; i < mesgSize; i++ {
 		mesg[i] = 'w'
 	}
-	encMesg, hashEnc := ots.EncryptMessage(&dataPVSS, mesg)
-
-	gr := util.GetGroup(*filePtr)
-	log.Lvl3(gr)
-
-	scurl, err := ots.CreateSkipchain(gr.Roster)
-
+	encMesg, hashEnc, err := ots.EncryptMessage(&dataPVSS, mesg)
 	if err != nil {
-		log.Errorf("Could not create skipchain: %v", err)
+		log.Errorf("Could not encrypt message: %v", err)
 		os.Exit(1)
 	}
 
@@ -84,7 +80,6 @@ func main() {
 
 	// Bob gets it from Alice
 	writeID := writeSB.Hash
-
 	// Get write transaction from skipchain
 	writeSB, writeTxnData, sig, err := ots.GetWriteTxnSB(scurl, writeID)
 	if err != nil {
@@ -93,16 +88,13 @@ func main() {
 	}
 
 	sigVerErr := ots.VerifyTxnSignature(writeTxnData, sig, wrPubKey)
-
 	if sigVerErr != nil {
 		log.Errorf("Signature verification failed on the write transaction: %v", sigVerErr)
 		os.Exit(1)
 	}
 
 	log.Info("Signature verified on the retrieved write transaction")
-
 	validHash := ots.VerifyEncMesg(writeTxnData, encMesg)
-
 	if validHash == 0 {
 		log.Info("Valid hash for encrypted message")
 	} else {
@@ -126,9 +118,7 @@ func main() {
 	acPubKeys := readSB.Roster.Publics()
 	// Bob obtains the SC public keys from T_W
 	scPubKeys = writeTxnData.SCPublicKeys
-
 	decShares, err := ots.GetDecryptedShares(scurl, el, updWriteSB, readSB.SkipBlockFix, acPubKeys, scPubKeys, privKey, readSB.Index)
-
 	if err != nil {
 		log.Errorf("Could not get the decrypted shares: %v", err)
 		os.Exit(1)
@@ -137,7 +127,6 @@ func main() {
 	var validKeys []abstract.Point
 	var validEncShares []*pvss.PubVerShare
 	var validDecShares []*pvss.PubVerShare
-
 	sz := len(decShares)
 	for i := 0; i < sz; i++ {
 		validKeys = append(validKeys, writeTxnData.SCPublicKeys[i])
@@ -148,14 +137,19 @@ func main() {
 	// Normally Bob doesn't have dataPVSS but we are
 	// using it only for PVSS parameters for simplicity
 	recSecret, err := pvss.RecoverSecret(dataPVSS.Suite, writeTxnData.G, validKeys, validEncShares, validDecShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
-
 	if err != nil {
 		log.Errorf("Could not recover secret: %v", err)
 		os.Exit(1)
 	}
 
-	recMesg := ots.DecryptMessage(recSecret, encMesg, writeTxnData)
-	log.Info("Recovered message is:", string(recMesg))
+	log.Info("Recovered secret")
+	recMesg, err := ots.DecryptMessage(recSecret, encMesg, writeTxnData)
+	if err != nil {
+		log.Errorf("Could not decrypt message: %v", err)
+		os.Exit(1)
+	}
+	log.Info("Recovered message?:", (bytes.Compare(recMesg, mesg) == 0))
+	// log.Info("Recovered message is:", string(recMesg))
 
 	////////////////////////////////////////////////////
 
@@ -218,5 +212,4 @@ func main() {
 	//
 	// recMesg = ots.DecryptMessage(recSecret, encMesg, writeTxnData)
 	// log.Info("Recovered message is:", recMesg)
-
 }

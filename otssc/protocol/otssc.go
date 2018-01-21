@@ -33,10 +33,9 @@ type OTSDecrypt struct {
 	ChannelAnnounce chan StructAnnounceDecrypt
 	ChannelReply    chan []StructDecryptReply
 	DecShares       chan []*util.DecryptedShare
-	// DecShares       chan []*util.DecryptedShare
-	DecReqData *util.OTSDecryptReqData
-	Signature  *crypto.SchnorrSig
-	RootIndex  int
+	DecReqData      *util.OTSDecryptReqData
+	Signature       *crypto.SchnorrSig
+	RootIndex       int
 }
 
 func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
@@ -63,7 +62,6 @@ func NewProtocol(n *onet.TreeNodeInstance) (onet.ProtocolInstance, error) {
 func (p *OTSDecrypt) Start() error {
 	log.Lvl3("Starting OTSDecrypt")
 	for _, c := range p.Children() {
-
 		err := p.SendTo(c, &AnnounceDecrypt{
 			DecReqData: p.DecReqData,
 			Signature:  p.Signature,
@@ -72,6 +70,7 @@ func (p *OTSDecrypt) Start() error {
 
 		if err != nil {
 			log.Error(p.Info(), "failed to send to", c.Name(), err)
+			return err
 		}
 	}
 	return nil
@@ -99,20 +98,15 @@ func (p *OTSDecrypt) Dispatch() error {
 		ds := &util.DecryptedShare{
 			Index: p.Index(),
 		}
-
 		tempSh, err := pvss.DecShare(network.Suite, h, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
-
 		if err != nil {
 			log.Error(p.Info(), "Failed to decrypt share", p.Name(), err)
-			// ds.Data = []byte{}
 			ds.K = nil
 			ds.Cs = nil
 		} else {
 			K, Cs := elGamalEncrypt(tempSh, writeTxnData.ReaderPk)
 			ds.K = K
 			ds.Cs = Cs
-			// reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
-			// ds.Data = reencSh
 		}
 
 		err = p.SendTo(p.Parent(), &DecryptReply{ds})
@@ -126,7 +120,6 @@ func (p *OTSDecrypt) Dispatch() error {
 	var decShares []*util.DecryptedShare
 	idx := p.RootIndex
 	reply := <-p.ChannelReply
-
 	for _, c := range reply {
 		decShares = append(decShares, c.DecryptReply.DecShare)
 	}
@@ -145,36 +138,35 @@ func (p *OTSDecrypt) Dispatch() error {
 	ds := &util.DecryptedShare{
 		Index: p.Index(),
 	}
-
 	tempSh, err := pvss.DecShare(network.Suite, h, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
-
-	// tempSh, err := pvss.DecShare(network.Suite, writeTxnData.H, p.Public(), writeTxnData.EncProofs[idx], p.Private(), writeTxnData.EncShares[idx])
-
 	if err != nil {
 		log.Error(p.Info(), "Failed to decrypt share", p.Name(), err)
-		// ds.Data = []byte{}
 		ds.K = nil
 		ds.Cs = nil
 	} else {
-		// reencSh := reencryptShare(tempSh, writeTxnData.ReaderPk, p.Private())
-		// ds.Data = reencSh
 		K, Cs := elGamalEncrypt(tempSh, writeTxnData.ReaderPk)
 		ds.K = K
 		ds.Cs = Cs
 	}
 
 	decShares = append(decShares, ds)
-
 	log.Lvl3(p.ServerIdentity().Address, "is done with total of", len(decShares))
 	p.DecShares <- decShares
 	return nil
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func elGamalEncrypt(ds *pvss.PubVerShare, rPubKey abstract.Point) (abstract.Point, []abstract.Point) {
 
 	msg, err := network.Marshal(ds)
 	if err != nil {
-		log.Errorf("Failed to marshall: %v", err)
+		log.Errorf("Marshaling PubVerShare failed: %v", err)
 		return nil, nil
 	}
 
@@ -182,91 +174,59 @@ func elGamalEncrypt(ds *pvss.PubVerShare, rPubKey abstract.Point) (abstract.Poin
 	k := network.Suite.Scalar().Pick(random.Stream)
 	K := network.Suite.Point().Mul(nil, k)
 	S := network.Suite.Point().Mul(rPubKey, k)
-
 	for len(msg) > 0 {
 		kp, _ := network.Suite.Point().Pick(msg, random.Stream)
 		Cs = append(Cs, network.Suite.Point().Add(S, kp))
 		msg = msg[min(len(msg), kp.PickLen()):]
 	}
-
 	return K, Cs
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func reencryptShare(ds *pvss.PubVerShare, rPubKey abstract.Point, privKey abstract.Scalar) []byte {
-
-	msg, err := network.Marshal(ds)
-	if err != nil {
-		log.Errorf("Failed to marshall: %v", err)
-		return nil
-	}
-
-	shSec, err := network.Suite.Point().Mul(rPubKey, privKey).MarshalBinary()
-	if err != nil {
-		log.Errorf("MarshalBinary failed: %v", err)
-		return nil
-	}
-	tempSymKey := sha256.Sum256(shSec)
-	symKey := tempSymKey[:]
-	cipher := network.Suite.Cipher(symKey)
-	reencShare := cipher.Seal(nil, msg)
-	return reencShare
-}
-
 func verifyDecryptionRequest(decReqData *util.OTSDecryptReqData, sig *crypto.SchnorrSig) (*util.WriteTxnData, error) {
-
 	_, tmp, err := network.Unmarshal(decReqData.WriteTxnSBF.Data)
 	if err != nil {
-		log.Errorf("Unmarshal failed: %v", err)
+		log.Errorf("Unmarshaling WriteTxnSBF failed: %v", err)
 		return nil, err
 	}
-	writeTxn := tmp.(*ocs.DataOCS).WriteTxn.Data
 
+	writeTxn := tmp.(*ocs.DataOCS).WriteTxn.Data
 	_, tmp, err = network.Unmarshal(decReqData.ReadTxnSBF.Data)
 	if err != nil {
-		log.Errorf("Unmarshal failed: %v", err)
+		log.Errorf("Unmarshaling ReadTxnSBF failed: %v", err)
 		return nil, err
 	}
-	readTxn := tmp.(*ocs.DataOCS).Read
 
+	readTxn := tmp.(*ocs.DataOCS).Read
 	// 1) Check signature on the DecReq message
 	drd, err := network.Marshal(decReqData)
 	if err != nil {
-		log.Errorf("Marshal failed: %v", err)
+		log.Errorf("Marshaling DecryptReqData failed: %v", err)
 		return nil, err
 	}
+
 	tmpHash := sha256.Sum256(drd)
 	drdHash := tmpHash[:]
 	sigErr := crypto.VerifySchnorr(network.Suite, writeTxn.ReaderPk, drdHash, *sig)
-
 	if sigErr != nil {
-		log.Error("Cannot verify DecReq message signature")
+		log.Errorf("Cannot verify DecReq message signature: %v", sigErr)
 		return nil, sigErr
 	}
 
 	// 2) Check inclusion proof
 	readSBHash := decReqData.ReadTxnSBF.CalculateHash()
 	proof := decReqData.InclusionProof
-
 	if len(proof.Signature) == 0 {
-		return nil, errors.New("No signature present" + log.Stack())
+		log.Error("No signature present on forward-link")
+		return nil, errors.New("No signature present on forward-link")
 	}
 
 	hc := proof.Hash.Equal(readSBHash)
-
 	if !hc {
 		log.Error("Forward link hash does not match read transaction hash")
 		return nil, errors.New("Forward link hash does not match read transaction hash")
 	}
 
 	sigErr = cosi.VerifySignature(network.Suite, decReqData.ACPublicKeys, proof.Hash, proof.Signature)
-
 	if sigErr != nil {
 		log.Error("Cannot verify forward-link signature")
 		return nil, sigErr
@@ -280,6 +240,5 @@ func verifyDecryptionRequest(decReqData *util.OTSDecryptReqData, sig *crypto.Sch
 		log.Error("Invalid write block hash in the read block")
 		return nil, errors.New("Invalid write block hash in the read block")
 	}
-
 	return writeTxn, nil
 }
