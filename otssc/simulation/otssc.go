@@ -6,6 +6,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	ots "github.com/dedis/cothority_template/ots"
+	ocs "github.com/dedis/onchain-secrets"
 
 	"github.com/dedis/cothority_template/ots/util"
 	"github.com/dedis/cothority_template/otssc/protocol"
@@ -40,14 +41,11 @@ func (otss *OTSSimulation) Setup(dir string, hosts []string) (*onet.SimulationCo
 
 	sc := &onet.SimulationConfig{}
 	//TODO: 3rd parameter to CreateRoster is port #
-	log.Info("Simulation setup : CreateRoster")
 	otss.CreateRoster(sc, hosts, 2000)
-	log.Info("Simulation setup : CreateTree")
 	err := otss.CreateTree(sc)
 	if err != nil {
 		return nil, err
 	}
-	log.Info("Returning from Setup")
 	return sc, nil
 }
 
@@ -72,24 +70,30 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		mesg[i] = 'w'
 	}
 
+	// create_sc := monitor.NewTimeMeasure("CreateSC")
+	scurl, err := ots.CreateSkipchain(acRoster)
+	// create_sc.Record()
+	if err != nil {
+		return err
+	}
+	// Transactions with trustee size = 10
+	// Total block # = 2 x dummyTxnCount
+	// dummyTxnCount := 32
+	// dummyerr := prepareDummyDP(scurl, acRoster, dummyTxnCount)
+	// if dummyerr != nil {
+	// 	log.Errorf("Dummy errors is: %v", dummyerr)
+	// 	return err
+	// }
+
 	for round := 0; round < otss.Rounds; round++ {
 		log.Info("Round:", round)
-		// Transactions with trustee size = 10
-		// Total block # = 2 x dummyTxnCount
-		// dummyTxnCount := 5
-		// prepareDummyDP(scurl, acRoster, dummyTxnCount)
-		create_sc := monitor.NewTimeMeasure("CreateSC")
-		scurl, err := ots.CreateSkipchain(acRoster)
-		create_sc.Record()
-		if err != nil {
-			return err
-		}
 
 		dataPVSS := util.DataPVSS{
 			Suite:        ed25519.NewAES128SHA256Ed25519(false),
 			SCPublicKeys: scPubKeys,
 			NumTrustee:   numTrustee,
 		}
+
 		// create_keys := monitor.NewTimeMeasure("CreateKeys")
 		wrPrivKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 		wrPubKey := dataPVSS.Suite.Point().Mul(nil, wrPrivKey)
@@ -112,9 +116,9 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			return err
 		}
 
-		// create_wrt_txn := monitor.NewTimeMeasure("CreateWriteTxn")
+		create_wrt_txn := monitor.NewTimeMeasure("CreateWriteTxn")
 		writeSB, err := ots.CreateWriteTxn(scurl, &dataPVSS, hashEnc, pubKey, wrPrivKey)
-		// create_wrt_txn.Record()
+		create_wrt_txn.Record()
 		if err != nil {
 			return err
 		}
@@ -128,6 +132,8 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		if err != nil {
 			return err
 		}
+
+		log.Info("Write index is:", writeSB.Index)
 
 		// ver_txn_sig := monitor.NewTimeMeasure("VerifyTxnSig")
 		sigVerErr := ots.VerifyTxnSignature(writeTxnData, txnSig, wrPubKey)
@@ -245,13 +251,19 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 	return nil
 }
 
-// func prepareDummyDP(scurl *ocs.SkipChainURL, scRoster *onet.Roster, pairCount int) error {
-//
-// 	scPubKeys := scRoster.Publics()
-// 	numTrustee := len(scPubKeys)
-// 	dp, err := ots.SetupPVSS(scPubKeys, numTrustee)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	return ots.AddDummyTxnPairs(scurl, dp, pairCount)
-// }
+func prepareDummyDP(scurl *ocs.SkipChainURL, scRoster *onet.Roster, pairCount int) error {
+
+	scPubKeys := scRoster.Publics()
+	numTrustee := len(scPubKeys)
+	dp := util.DataPVSS{
+		Suite:        ed25519.NewAES128SHA256Ed25519(false),
+		SCPublicKeys: scPubKeys,
+		NumTrustee:   numTrustee,
+	}
+
+	// err := ots.SetupPVSS(&dp, scPubKeys[0])
+	// if err != nil {
+	// 	return err
+	// }
+	return ots.AddDummyTxnPairs(scurl, &dp, pairCount)
+}

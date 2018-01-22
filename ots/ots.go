@@ -21,7 +21,6 @@ import (
 
 func AddDummyTxnPairs(scurl *ocs.SkipChainURL, dp *util.DataPVSS, pairCount int) error {
 	mesg := "Bana istediginiz kadar gidip gelebilirsiniz."
-	_, hashEnc, _ := EncryptMessage(dp, []byte(mesg))
 	writerSK := make([]abstract.Scalar, pairCount)
 	writerPK := make([]abstract.Point, pairCount)
 	readerSK := make([]abstract.Scalar, pairCount)
@@ -34,6 +33,12 @@ func AddDummyTxnPairs(scurl *ocs.SkipChainURL, dp *util.DataPVSS, pairCount int)
 		readerPK[i] = dp.Suite.Point().Mul(nil, readerSK[i])
 		writerSK[i] = dp.Suite.Scalar().Pick(random.Stream)
 		writerPK[i] = dp.Suite.Point().Mul(nil, writerSK[i])
+		err := SetupPVSS(dp, readerPK[i])
+		if err != nil {
+			return err
+		}
+		_, hashEnc, _ := EncryptMessage(dp, []byte(mesg))
+
 		tmp, err := CreateWriteTxn(scurl, dp, hashEnc, readerPK[i], writerSK[i])
 		if err != nil {
 			return err
