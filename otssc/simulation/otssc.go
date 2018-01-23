@@ -60,10 +60,11 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 	acSize := 10
 	acRoster := onet.NewRoster(config.Roster.List[:acSize])
 	scPubKeys := config.Roster.Publics()
-	log.Info("Tree size is", config.Tree.Size())
-	log.Info("PubKey size is", len(scPubKeys))
+	log.Info("SC PubKeys Size", len(scPubKeys))
+	log.Info("AC Size:", len(acRoster.List))
 
 	numTrustee := config.Tree.Size()
+	log.Info("# of trustees:", numTrustee)
 	mesgSize := 1024 * 1024
 	mesg := make([]byte, mesgSize)
 	for i := 0; i < mesgSize; i++ {
@@ -94,18 +95,14 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			NumTrustee:   numTrustee,
 		}
 
-		// create_keys := monitor.NewTimeMeasure("CreateKeys")
 		wrPrivKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 		wrPubKey := dataPVSS.Suite.Point().Mul(nil, wrPrivKey)
 		// Reader's pk/sk pair
 		privKey := dataPVSS.Suite.Scalar().Pick(random.Stream)
 		pubKey := dataPVSS.Suite.Point().Mul(nil, privKey)
-		// create_keys.Record()
 
-		// setup_pvss := monitor.NewTimeMeasure("SetupPVSS")
 		write_txn_prep := monitor.NewTimeMeasure("WriteTxnPrep")
 		err = ots.SetupPVSS(&dataPVSS, pubKey)
-		// setup_pvss.Record()
 		if err != nil {
 			return err
 		}
@@ -126,9 +123,9 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		// Bob gets it from Alice
 		writeID := writeSB.Hash
 		// Get write transaction from skipchain
-		// get_write_txn_sb := monitor.NewTimeMeasure("GetWriteTxnSB")
+		get_write_txn_sb := monitor.NewTimeMeasure("GetWriteTxnSB")
 		writeSB, writeTxnData, txnSig, err := ots.GetWriteTxnSB(scurl, writeID)
-		// get_write_txn_sb.Record()
+		get_write_txn_sb.Record()
 		if err != nil {
 			return err
 		}
@@ -150,16 +147,16 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			return errors.New("Cannot verify encrypted message")
 		}
 
-		// create_read_txn := monitor.NewTimeMeasure("CreateReadTxn")
+		create_read_txn := monitor.NewTimeMeasure("CreateReadTxn")
 		readSB, err := ots.CreateReadTxn(scurl, writeID, privKey)
-		// create_read_txn.Record()
+		create_read_txn.Record()
 		if err != nil {
 			return err
 		}
 
-		// get_upd_wsb := monitor.NewTimeMeasure("GetUpdatedWriteSB")
+		get_upd_wsb := monitor.NewTimeMeasure("GetUpdatedWriteSB")
 		updWriteSB, err := ots.GetUpdatedWriteTxnSB(scurl, writeID)
-		// get_upd_wsb.Record()
+		get_upd_wsb.Record()
 		if err != nil {
 			return err
 		}

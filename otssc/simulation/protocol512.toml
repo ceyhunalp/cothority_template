@@ -1,7 +1,0 @@
-Simulation = "OTS"
-Servers = 512
-BF = 511
-Rounds = 10
-
-Hosts
-512
