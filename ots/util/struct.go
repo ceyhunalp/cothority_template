@@ -34,13 +34,8 @@ type OTSDecryptReqData struct {
 	ACPublicKeys   []abstract.Point
 }
 
-// type DecryptedShare struct {
-// 	Index int
-// 	Data  []byte
-// }
-
 type DecryptedShare struct {
-	Index int
-	K     abstract.Point
-	Cs    []abstract.Point
+	// Index int
+	K  abstract.Point
+	Cs []abstract.Point
 }
