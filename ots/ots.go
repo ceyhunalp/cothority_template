@@ -20,7 +20,7 @@ import (
 	"gopkg.in/dedis/onet.v1/crypto"
 )
 
-func AddDummyTxnPairs(scurl *ocs.SkipChainURL, dp *util.DataPVSS, pairCount int) error {
+func AddDummyTxnPairs(scurl *ocs.SkipChainURL, dp *util.DataPVSS, pairCount int) ([]*skipchain.SkipBlock, []*skipchain.SkipBlock) {
 	mesg := "On Wisconsin!"
 	writerSK := make([]abstract.Scalar, pairCount)
 	writerPK := make([]abstract.Point, pairCount)
@@ -36,25 +36,29 @@ func AddDummyTxnPairs(scurl *ocs.SkipChainURL, dp *util.DataPVSS, pairCount int)
 		writerPK[i] = dp.Suite.Point().Mul(nil, writerSK[i])
 		err := SetupPVSS(dp, readerPK[i])
 		if err != nil {
-			return err
+			return nil, nil
+			// return err
 		}
 		_, hashEnc, _ := EncryptMessage(dp, []byte(mesg))
 
 		tmp, err := CreateWriteTxn(scurl, dp, hashEnc, readerPK[i], writerSK[i])
 		if err != nil {
-			return err
+			return nil, nil
+			// return err
 		}
 		sbWrite[i] = tmp
 	}
 
-	for i := 0; i < pairCount-1; i++ {
+	for i := 0; i < pairCount; i++ {
 		tmp, err := CreateReadTxn(scurl, sbWrite[i].Hash, readerSK[i])
 		if err != nil {
-			return err
+			return nil, nil
+			// return err
 		}
 		sbRead[i] = tmp
 	}
-	return nil
+	// return nil
+	return sbWrite, sbRead
 }
 
 func ElGamalDecrypt(shares []*util.DecryptedShare, privKey abstract.Scalar) ([]*pvss.PubVerShare, error) {

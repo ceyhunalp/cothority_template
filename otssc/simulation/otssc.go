@@ -123,9 +123,9 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 		// Bob gets it from Alice
 		writeID := writeSB.Hash
 		// Get write transaction from skipchain
-		get_write_txn_sb := monitor.NewTimeMeasure("GetWriteTxnSB")
+		// get_write_txn_sb := monitor.NewTimeMeasure("GetWriteTxnSB")
 		writeSB, writeTxnData, txnSig, err := ots.GetWriteTxnSB(scurl, writeID)
-		get_write_txn_sb.Record()
+		// get_write_txn_sb.Record()
 		if err != nil {
 			return err
 		}
@@ -154,9 +154,9 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 			return err
 		}
 
-		get_upd_wsb := monitor.NewTimeMeasure("GetUpdatedWriteSB")
+		// get_upd_wsb := monitor.NewTimeMeasure("GetUpdatedWriteSB")
 		updWriteSB, err := ots.GetUpdatedWriteTxnSB(scurl, writeID)
-		get_upd_wsb.Record()
+		// get_upd_wsb.Record()
 		if err != nil {
 			return err
 		}
@@ -232,14 +232,15 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 
 		// ver_recons_pvss := monitor.NewTimeMeasure("VerifyandReconstructPVSS")
 		recSecret, err := pvss.RecoverSecret(dataPVSS.Suite, writeTxnData.G, validKeys, validEncShares, validDecShares, dataPVSS.Threshold, dataPVSS.NumTrustee)
-		// ver_recons_pvss.Record()
+		recover_sec.Record()
 		if err != nil {
 			return err
 		}
 
-		// dec_mesg := monitor.NewTimeMeasure("DecryptMessage")
+		dec_mesg := monitor.NewTimeMeasure("DecryptMessage")
 		recvMesg, err := ots.DecryptMessage(recSecret, encMesg, writeTxnData)
-		recover_sec.Record()
+		dec_mesg.Record()
+		// recover_sec.Record()
 		if err != nil {
 			return err
 		}
@@ -249,7 +250,6 @@ func (otss *OTSSimulation) Run(config *onet.SimulationConfig) error {
 }
 
 func prepareDummyDP(scurl *ocs.SkipChainURL, scRoster *onet.Roster, pairCount int) error {
-
 	scPubKeys := scRoster.Publics()
 	numTrustee := len(scPubKeys)
 	dp := util.DataPVSS{
@@ -258,9 +258,6 @@ func prepareDummyDP(scurl *ocs.SkipChainURL, scRoster *onet.Roster, pairCount in
 		NumTrustee:   numTrustee,
 	}
 
-	// err := ots.SetupPVSS(&dp, scPubKeys[0])
-	// if err != nil {
-	// 	return err
-	// }
-	return ots.AddDummyTxnPairs(scurl, &dp, pairCount)
+	_, _ = ots.AddDummyTxnPairs(scurl, &dp, pairCount)
+	return nil
 }
